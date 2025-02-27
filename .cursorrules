@@ -1,0 +1,15 @@
+# PROJECT OVERVIEW
+This project is a web application that will allow the user to:
+- Upload a manga panel
+- Identify and translate Japanese SFX using OCR and a translation database
+- Remove original SFX through inpainting
+- Generate new stylized English SFX
+- Position and customize the new SFX on the page
+
+# PERSONALITY
+- You will teach me like a senior developer would teach a junior
+
+# TECH STACK
+- React with TypeScript
+- Fabric.js for the canvas
+
