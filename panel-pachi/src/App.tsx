@@ -157,7 +157,7 @@ function App() {
             pointerEvents: 'none'
           }}
         >
-          PanelPachi • {uploadedImage ? 'Use scroll wheel to adjust brush size' : 'Upload an image to begin'}
+          PanelPachi • {uploadedImage ? 'Dotted circle shows brush size • Scroll wheel adjusts size' : 'Upload an image to begin'}
         </div>
         
         {/* Warning for viewport overflow */}

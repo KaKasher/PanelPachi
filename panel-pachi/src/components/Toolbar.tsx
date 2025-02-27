@@ -24,7 +24,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
       </Typography>
       
       <ButtonGroup variant="contained" size="small">
-        <Tooltip title="Mask Drawing Tool - Use to mark areas for inpainting">
+        <Tooltip title="Mask Drawing Tool - Scroll to adjust brush size">
           <Button
             variant={currentTool === 'mask' ? 'contained' : 'outlined'}
             color={currentTool === 'mask' ? 'secondary' : 'primary'}
@@ -48,7 +48,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
         fontSize: '0.75rem'
       }}>
         <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
-          <Box component="span" sx={{ color: 'rgba(255,0,0,0.7)' }}>Tip:</Box> Scroll to change brush size
+          <Box component="span" sx={{ color: 'rgba(255,0,0,0.7)' }}>Tip:</Box> Cursor shows brush size • Scroll to resize
         </Typography>
       </Box>
     </Box>

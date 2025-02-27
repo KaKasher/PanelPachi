@@ -10,32 +10,58 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [brushSize, setBrushSize] = useState<number>(20);
+  const brushSizeRef = useRef<number>(20);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
   
-  // Function to update brush cursor
+  // Add a style element to force cursor inheritance in all canvas elements
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.innerHTML = `
+      .canvas-container, .upper-canvas, .lower-canvas {
+        cursor: inherit !important;
+      }
+    `;
+    document.head.appendChild(style);
+    
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
+  
+  // Function to update brush cursor with dotted circle
   const updateBrushCursor = (size: number) => {
     if (!containerRef.current) return;
     
-    // Create circular cursor to represent brush size
+    // Create circular cursor with dotted outline to represent brush size
     const cursorSize = size;
-    const cursorColor = 'rgba(255, 0, 0, 0.5)';
-    
-    // Create a cursor style with a circle representing the brush
     const cursorCanvas = document.createElement('canvas');
-    cursorCanvas.width = cursorSize * 2;
-    cursorCanvas.height = cursorSize * 2;
+    const padding = 4; // Extra padding for the cursor
+    cursorCanvas.width = cursorSize + padding * 2;
+    cursorCanvas.height = cursorSize + padding * 2;
     
     const ctx = cursorCanvas.getContext('2d');
     if (ctx) {
-      // Draw circle
+      // Draw circle with dotted outline
       ctx.beginPath();
-      ctx.arc(cursorSize, cursorSize, cursorSize / 2, 0, Math.PI * 2);
-      ctx.fillStyle = cursorColor;
-      ctx.fill();
       
-      // Add border for better visibility
+      // Create dotted circle
+      ctx.setLineDash([3, 3]); // Create dotted line effect
       ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      
+      // Draw circle in center of canvas
+      ctx.arc(
+        cursorSize / 2 + padding, 
+        cursorSize / 2 + padding, 
+        cursorSize / 2, 
+        0, 
+        Math.PI * 2
+      );
+      ctx.stroke();
+      
+      // Add red overlay with transparency
+      ctx.setLineDash([]); // Reset to solid
+      ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
       ctx.lineWidth = 1;
       ctx.stroke();
     }
@@ -44,18 +70,21 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
     
     // Apply the cursor to the container when in mask mode
     if (tool === 'mask') {
-      containerRef.current.style.cursor = `url(${dataURL}) ${cursorSize}, auto`;
+      // Position cursor so the hotspot is in the middle of the circle
+      const hotspot = Math.floor(cursorSize / 2) + padding;
+      containerRef.current.style.cursor = `url(${dataURL}) ${hotspot} ${hotspot}, crosshair`;
     } else {
       containerRef.current.style.cursor = 'default';
     }
   };
   
-  // Update brush size and cursor
+  // Update brush size without triggering re-renders
   const updateBrushSize = (newSize: number) => {
     // Clamp value between 5 and 50
     const clampedSize = Math.min(Math.max(newSize, 5), 50);
     
-    setBrushSize(clampedSize);
+    // Update the ref instead of state to avoid re-renders
+    brushSizeRef.current = clampedSize;
     
     if (fabricCanvasRef.current && fabricCanvasRef.current.freeDrawingBrush) {
       fabricCanvasRef.current.freeDrawingBrush.width = clampedSize;
@@ -63,7 +92,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
     }
   };
   
-  // Initialize the canvas
+  // Initialize the canvas only once
   useEffect(() => {
     if (canvasRef.current) {
       try {
@@ -86,11 +115,11 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         // Initialize the brush properly
         const pencilBrush = new PencilBrush(canvas);
         pencilBrush.color = 'rgba(255, 0, 0, 0.5)';
-        pencilBrush.width = brushSize;
+        pencilBrush.width = brushSizeRef.current;
         canvas.freeDrawingBrush = pencilBrush;
         
         // Initialize cursor
-        updateBrushCursor(brushSize);
+        updateBrushCursor(brushSizeRef.current);
         
         setLoadingStatus("Canvas ready");
       } catch (error) {
@@ -105,16 +134,16 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         }
       };
     }
-  }, [tool, brushSize]);
+  }, [tool]); // Only depend on tool, not on brushSize
   
-  // Wheel event for brush size
+  // Wheel event for brush size that doesn't cause re-renders
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
       if (tool === 'mask') {
         e.preventDefault();
         // Adjust brush size based on wheel direction
         const delta = e.deltaY > 0 ? -2 : 2;
-        updateBrushSize(brushSize + delta);
+        updateBrushSize(brushSizeRef.current + delta);
       }
     };
     
@@ -128,7 +157,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         container.removeEventListener('wheel', handleWheel);
       }
     };
-  }, [tool, brushSize]);
+  }, [tool]); // Only depend on tool, not brushSize
   
   // Handle window resize
   useEffect(() => {
@@ -155,10 +184,10 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
       // Make sure we update the brush when tool changes
       if (tool === 'mask' && fabricCanvasRef.current.freeDrawingBrush) {
         fabricCanvasRef.current.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
-        fabricCanvasRef.current.freeDrawingBrush.width = brushSize;
+        fabricCanvasRef.current.freeDrawingBrush.width = brushSizeRef.current;
         
         // Update cursor
-        updateBrushCursor(brushSize);
+        updateBrushCursor(brushSizeRef.current);
       } else {
         // Reset cursor
         if (containerRef.current) {
@@ -166,7 +195,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         }
       }
     }
-  }, [tool, brushSize]);
+  }, [tool]); // Only depend on tool, not brushSize
   
   // Load the image when it changes
   useEffect(() => {
@@ -244,10 +273,10 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
             canvas.isDrawingMode = true;
             if (canvas.freeDrawingBrush) {
               canvas.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
-              canvas.freeDrawingBrush.width = brushSize;
+              canvas.freeDrawingBrush.width = brushSizeRef.current;
               
               // Update cursor
-              updateBrushCursor(brushSize);
+              updateBrushCursor(brushSizeRef.current);
             }
           }
           
@@ -288,7 +317,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
     };
     
     reader.readAsDataURL(image);
-  }, [image, tool, brushSize]);
+  }, [image, tool]); // Don't depend on brushSize here
   
   return (
     <div 
@@ -306,32 +335,6 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
       }}
     >
       <canvas ref={canvasRef} />
-      
-      {/* Brush size indicator */}
-      {tool === 'mask' && (
-        <div style={{
-          position: 'absolute',
-          top: '10px',
-          right: '10px',
-          padding: '5px 10px',
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          color: '#fff',
-          borderRadius: '4px',
-          fontSize: '12px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}>
-          <div style={{
-            width: `${brushSize}px`,
-            height: `${brushSize}px`,
-            borderRadius: '50%',
-            backgroundColor: 'rgba(255,0,0,0.5)',
-            border: '1px solid white'
-          }} />
-          <span>Brush: {brushSize}px (Scroll to adjust)</span>
-        </div>
-      )}
       
       {/* Loading status overlay */}
       {loadingStatus && (
