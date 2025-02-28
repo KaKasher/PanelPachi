@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import { useCallback, useState, type FC } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { CloudUpload } from '@mui/icons-material';
 
@@ -6,7 +6,7 @@ interface ImageUploaderProps {
   onImageUpload: (file: File) => void;
 }
 
-const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) => {
+const ImageUploader: FC<ImageUploaderProps> = ({ onImageUpload }) => {
   const [isDragActive, setIsDragActive] = useState(false);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {

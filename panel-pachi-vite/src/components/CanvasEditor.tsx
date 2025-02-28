@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FC } from 'react';
 import { Canvas, Image as FabricImage, PencilBrush } from 'fabric';
 
 interface CanvasEditorProps {
@@ -6,7 +6,7 @@ interface CanvasEditorProps {
   tool: string;
 }
 
-const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
+const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);

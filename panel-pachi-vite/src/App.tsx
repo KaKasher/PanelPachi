@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 import ImageUploader from './components/ImageUploader';
 import CanvasEditor from './components/CanvasEditor';

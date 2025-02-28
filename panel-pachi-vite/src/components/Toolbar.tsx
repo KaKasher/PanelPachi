@@ -1,4 +1,4 @@
-import React from 'react';
+import { type FC } from 'react';
 import { Brush } from '@mui/icons-material';
 import { Tooltip, Button, ButtonGroup, Typography, Box } from '@mui/material';
 
@@ -7,7 +7,7 @@ interface ToolbarProps {
   onToolChange: (tool: string) => void;
 }
 
-const Toolbar: React.FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
+const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
   return (
     <Box sx={{
       display: 'flex',
