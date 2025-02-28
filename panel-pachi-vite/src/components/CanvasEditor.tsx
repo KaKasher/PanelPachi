@@ -108,8 +108,8 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
     // Calculate new zoom level
     let newZoom = currentZoom * zoomFactor;
     
-    // Clamp zoom level to reasonable limits (0.2x to 5x)
-    newZoom = Math.min(Math.max(newZoom, 0.2), 5);
+    // Clamp zoom level to reasonable limits (1x to 4x)
+    newZoom = Math.min(Math.max(newZoom, 0.5), 4);
     
     // Don't do anything if we're already at the limit
     if (newZoom === currentZoom) return;
