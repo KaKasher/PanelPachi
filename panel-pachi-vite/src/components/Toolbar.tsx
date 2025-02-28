@@ -48,7 +48,7 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
         fontSize: '0.75rem'
       }}>
         <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>
-          <Box component="span" sx={{ color: 'rgba(255,0,0,0.7)' }}>Tip:</Box> Cursor shows brush size • Scroll to resize
+          <Box component="span" sx={{ color: 'rgba(255,0,0,0.7)' }}>Tip:</Box> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
         </Typography>
       </Box>
     </Box>

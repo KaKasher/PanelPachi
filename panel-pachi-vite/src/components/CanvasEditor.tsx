@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FC } from 'react';
-import { Canvas, Image as FabricImage, PencilBrush } from 'fabric';
+import { Canvas, Image as FabricImage, PencilBrush, Rect } from 'fabric';
 
 interface CanvasEditorProps {
   image: File | null;
@@ -12,6 +12,13 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const brushSizeRef = useRef<number>(20);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
+  
+  // Add ref to track zoom level
+  const zoomRef = useRef<number>(1);
+  
+  // Add a ref to track pan position
+  const panPositionRef = useRef({ x: 0, y: 0 });
+  const isPanningRef = useRef(false);
   
   // Add a style element to force cursor inheritance in all canvas elements
   useEffect(() => {
@@ -32,50 +39,42 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
   const updateBrushCursor = (size: number) => {
     if (!containerRef.current) return;
     
-    // Create circular cursor with dotted outline to represent brush size
-    const cursorSize = size;
-    const cursorCanvas = document.createElement('canvas');
-    const padding = 4; // Extra padding for the cursor
-    cursorCanvas.width = cursorSize + padding * 2;
-    cursorCanvas.height = cursorSize + padding * 2;
+    // Get the current zoom level
+    const zoom = zoomRef.current;
     
-    const ctx = cursorCanvas.getContext('2d');
-    if (ctx) {
-      // Draw circle with dotted outline
-      ctx.beginPath();
-      
-      // Create dotted circle
-      ctx.setLineDash([3, 3]); // Create dotted line effect
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 2;
-      
-      // Draw circle in center of canvas
-      ctx.arc(
-        cursorSize / 2 + padding, 
-        cursorSize / 2 + padding, 
-        cursorSize / 2, 
-        0, 
-        Math.PI * 2
-      );
-      ctx.stroke();
-      
-      // Add red overlay with transparency
-      ctx.setLineDash([]); // Reset to solid
-      ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
+    // Adjust cursor size based on zoom level
+    const zoomedSize = size * zoom;
     
-    const dataURL = cursorCanvas.toDataURL();
+    // Create an SVG circle cursor with a dotted stroke
+    const circle = `
+      <svg
+        height="${zoomedSize}"
+        width="${zoomedSize}"
+        viewBox="0 0 ${zoomedSize} ${zoomedSize}"
+        xmlns="http://www.w3.org/2000/svg"
+        style="background-color: transparent;"
+      >
+        <circle
+          cx="${zoomedSize / 2}"
+          cy="${zoomedSize / 2}"
+          r="${(zoomedSize / 2) - 1}"
+          stroke="rgba(255, 255, 255, 0.8)"
+          stroke-width="1"
+          stroke-dasharray="4 2"
+          fill="none"
+        />
+      </svg>
+    `;
     
-    // Apply the cursor to the container when in mask mode
-    if (tool === 'mask') {
-      // Position cursor so the hotspot is in the middle of the circle
-      const hotspot = Math.floor(cursorSize / 2) + padding;
-      containerRef.current.style.cursor = `url(${dataURL}) ${hotspot} ${hotspot}, crosshair`;
-    } else {
-      containerRef.current.style.cursor = 'default';
-    }
+    // Convert the SVG to a data URL
+    const svgBlob = new Blob([circle], {type: 'image/svg+xml'});
+    const url = URL.createObjectURL(svgBlob);
+    
+    // Apply the cursor to the container
+    containerRef.current.style.cursor = `url('${url}') ${zoomedSize / 2} ${zoomedSize / 2}, crosshair`;
+    
+    // Clean up the URL once the cursor is applied
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   };
   
   // Update brush size without triggering re-renders
@@ -91,6 +90,82 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
       updateBrushCursor(clampedSize);
     }
   };
+
+  // Function to handle zooming
+  const zoomCanvas = (delta: number, x: number, y: number) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    // Get pointer position relative to canvas
+    const pointer = canvas.getPointer({ clientX: x, clientY: y });
+
+    // More granular zoom increments for smoother zooming
+    const zoomFactor = delta > 0 ? 0.95 : 1.05;
+    
+    // Get current zoom from the canvas 
+    const currentZoom = canvas.getZoom();
+    
+    // Calculate new zoom level
+    let newZoom = currentZoom * zoomFactor;
+    
+    // Clamp zoom level to reasonable limits (0.2x to 5x)
+    newZoom = Math.min(Math.max(newZoom, 0.2), 5);
+    
+    // Don't do anything if we're already at the limit
+    if (newZoom === currentZoom) return;
+    
+    // Use zoomToPoint with the correct pointer position
+    canvas.zoomToPoint({ x: pointer.x, y: pointer.y }, newZoom);
+    
+    // Update our zoom reference
+    zoomRef.current = newZoom;
+    
+    // Update cursor if we're in mask mode
+    if (tool === 'mask') {
+      updateBrushCursor(brushSizeRef.current);
+    }
+    
+    // Display current zoom level
+    setLoadingStatus(`Zoom: ${Math.round(newZoom * 100)}%`);
+    
+    // Clear status after a delay
+    setTimeout(() => {
+      if (loadingStatus && loadingStatus.includes("Zoom")) {
+        setLoadingStatus("");
+      }
+    }, 1500);
+    
+    // Prevent drawing outside image bounds
+    canvas.renderAll();
+  };
+  
+  // Function to reset zoom to 100%
+  const resetZoom = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+    
+    // Reset zoom to 1 (100%)
+    canvas.setZoom(1);
+    
+    // Reset pan to center
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    
+    // Update our zoom reference
+    zoomRef.current = 1;
+    
+    // Reset any accumulated pan values
+    panPositionRef.current = { x: 0, y: 0 };
+    
+    // Show feedback
+    setLoadingStatus("Zoom reset to 100%");
+    
+    // Clear feedback after a delay
+    setTimeout(() => {
+      if (loadingStatus && loadingStatus.includes("Zoom")) {
+        setLoadingStatus("");
+      }
+    }, 1000);
+  };
   
   // Initialize the canvas only once
   useEffect(() => {
@@ -102,12 +177,16 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
         
         setLoadingStatus("Initializing canvas...");
         
-        // Initialize canvas - we'll resize it when the image loads
+        // Initialize canvas with clipPath option to restrict drawing to canvas bounds
         fabricCanvasRef.current = new Canvas(canvasRef.current, {
           isDrawingMode: tool === 'mask',
           backgroundColor: '#111',
           width: containerWidth,
-          height: containerHeight
+          height: containerHeight,
+          selection: false, // Disable selection to prevent accidental selection
+          preserveObjectStacking: true, // Maintain stacking order
+          fireRightClick: false, // Don't fire right click
+          stopContextMenu: true // Prevent context menu
         });
         
         const canvas = fabricCanvasRef.current;
@@ -136,28 +215,78 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
     }
   }, [tool]); // Only depend on tool, not on brushSize
   
-  // Wheel event for brush size that doesn't cause re-renders
+  // Wheel event for brush size and zooming
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
-      if (tool === 'mask') {
-        e.preventDefault();
+      // Prevent the default behavior first to avoid page scrolling
+      e.preventDefault();
+      
+      // Check if Ctrl key is pressed for zooming
+      if (e.ctrlKey || e.metaKey) { // Support Cmd key on Mac
+        // Use zoom function with mouse position
+        zoomCanvas(e.deltaY, e.clientX, e.clientY);
+      } 
+      // Otherwise adjust brush size if in mask mode
+      else if (tool === 'mask') {
         // Adjust brush size based on wheel direction
         const delta = e.deltaY > 0 ? -2 : 2;
         updateBrushSize(brushSizeRef.current + delta);
       }
     };
     
+    // Add keydown and keyup event to show visual feedback when Ctrl is pressed
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Handle Ctrl key press for cursor change
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setLoadingStatus('Ready to zoom (Ctrl+Scroll)');
+        if (containerRef.current && containerRef.current.style.cursor !== 'zoom-in') {
+          containerRef.current.style.cursor = 'zoom-in';
+        }
+      }
+      
+      // Handle Ctrl+0 to reset zoom
+      if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.key === 'NumPad0')) {
+        e.preventDefault();
+        resetZoom();
+      }
+      
+      // Handle Esc key to cancel current action
+      if (e.key === 'Escape') {
+        // Reset any pending operations if needed
+        setLoadingStatus('');
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setLoadingStatus('');
+        if (!containerRef.current) return;
+        
+        if (tool === 'mask') {
+          updateBrushCursor(brushSizeRef.current);
+        } else {
+          containerRef.current.style.cursor = 'default';
+        }
+      }
+    };
+    
     const container = containerRef.current;
     if (container) {
+      // Use passive: false to prevent browser warnings with preventDefault
       container.addEventListener('wheel', handleWheel, { passive: false });
+      
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
     }
     
     return () => {
       if (container) {
         container.removeEventListener('wheel', handleWheel);
       }
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
     };
-  }, [tool]); // Only depend on tool, not brushSize
+  }, [tool]); // Only depend on tool
   
   // Handle window resize
   useEffect(() => {
@@ -199,23 +328,23 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
   
   // Load the image when it changes
   useEffect(() => {
-    if (!image || !fabricCanvasRef.current) {
+    if (!image) {
       return;
     }
     
-    setLoadingStatus("Reading image file...");
+    setLoadingStatus("Loading image...");
     
     const reader = new FileReader();
     
     reader.onload = (e) => {
       if (!e.target?.result) {
-        setLoadingStatus("Failed to read image data");
+        setLoadingStatus("Failed to load image");
         return;
       }
       
-      setLoadingStatus("Creating image...");
-      const imageUrl = e.target.result as string;
-      const htmlImg = new window.Image();
+      // Create an HTML image element
+      const htmlImg = new Image();
+      htmlImg.src = e.target.result as string;
       
       htmlImg.onload = () => {
         if (!fabricCanvasRef.current || !containerRef.current) {
@@ -254,22 +383,38 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
           
           setLoadingStatus(`Scaled dimensions: ${scaledWidth}x${scaledHeight}`);
           
-          // IMPORTANT: Resize the canvas to match the scaled image dimensions
-          // This ensures users can only draw within the image area
+          // Resize the canvas to match the scaled image dimensions
           canvas.setWidth(scaledWidth);
           canvas.setHeight(scaledHeight);
           
           // Scale the image to fit exactly in the canvas
-          // Use the scale method as defined in the Fabric.js type definition
           fabricImg.scale(scale);
           
-          // Center the image in the canvas (should fill it exactly)
+          // Center the image in the canvas
           canvas.add(fabricImg);
           canvas.centerObject(fabricImg);
           
           // Make the image non-interactive
           fabricImg.selectable = false;
           fabricImg.evented = false;
+          
+          // Create a clip path rectangle that exactly matches the image
+          // This will prevent drawing outside the image boundaries
+          const clipRect = new Rect({
+            left: fabricImg.left,
+            top: fabricImg.top,
+            width: scaledWidth,
+            height: scaledHeight,
+            absolutePositioned: true
+          });
+          
+          // Set the clip path for the entire canvas
+          canvas.clipPath = clipRect;
+          
+          // Reset zoom level and viewport transform when loading a new image
+          zoomRef.current = 1;
+          canvas.setZoom(1);
+          canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
           
           // Re-initialize brush after image load to ensure it works
           if (tool === 'mask') {
@@ -286,43 +431,125 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
           canvas.renderAll();
           
           setLoadingStatus("Image loaded successfully");
+          setTimeout(() => setLoadingStatus(""), 1500);
           
-          // Log for debugging
-          console.log('Image loaded', {
-            containerWidth,
-            containerHeight,
-            imgWidth,
-            imgHeight,
-            scale,
-            scaledWidth,
-            scaledHeight,
-            imageUrlLength: imageUrl.length,
-            htmlImgComplete: htmlImg.complete,
-            htmlImgSize: `${htmlImg.width}x${htmlImg.height}`
-          });
         } catch (error) {
-          console.error('Error loading image to canvas:', error);
-          setLoadingStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          console.error("Error processing image:", error);
+          setLoadingStatus("Error processing image");
         }
       };
       
-      htmlImg.onerror = (error) => {
-        console.error('Error loading HTML image:', error);
+      htmlImg.onerror = () => {
         setLoadingStatus("Failed to load image");
       };
-      
-      // Set crossOrigin to anonymous to avoid tainted canvas issues
-      htmlImg.crossOrigin = "anonymous";
-      htmlImg.src = imageUrl;
     };
     
-    reader.onerror = (error) => {
-      console.error('Error reading file:', error);
-      setLoadingStatus("Error reading file");
+    reader.onerror = () => {
+      setLoadingStatus("Failed to read image file");
     };
     
     reader.readAsDataURL(image);
   }, [image, tool]); // Don't depend on brushSize here
+  
+  // Add mouse events for panning
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      // Only allow panning with space bar held or middle mouse button
+      if (e.button === 1 || (e.button === 0 && e.getModifierState('Space'))) {
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grabbing';
+        }
+        isPanningRef.current = true;
+        e.preventDefault();
+      }
+    };
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas || !isPanningRef.current) return;
+      
+      // Pan the canvas based on mouse movement
+      const delta = {
+        x: e.movementX,
+        y: e.movementY
+      };
+      
+      // Get current viewport transform
+      const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+      
+      // Update the transform with the movement delta
+      vpt[4] += delta.x;
+      vpt[5] += delta.y;
+      
+      // Update the canvas transform
+      canvas.setViewportTransform(vpt);
+      
+      // Store the pan position for reference
+      panPositionRef.current = {
+        x: vpt[4],
+        y: vpt[5]
+      };
+      
+      e.preventDefault();
+    };
+    
+    const handleMouseUp = (e: MouseEvent) => {
+      isPanningRef.current = false;
+      
+      if (containerRef.current) {
+        // Restore appropriate cursor
+        if (e.getModifierState('Control') || e.getModifierState('Meta')) {
+          containerRef.current.style.cursor = 'zoom-in';
+        } else if (tool === 'mask') {
+          updateBrushCursor(brushSizeRef.current);
+        } else {
+          containerRef.current.style.cursor = 'default';
+        }
+      }
+    };
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grab';
+        }
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        if (containerRef.current) {
+          if (tool === 'mask') {
+            updateBrushCursor(brushSizeRef.current);
+          } else {
+            containerRef.current.style.cursor = 'default';
+          }
+        }
+        isPanningRef.current = false;
+      }
+    };
+    
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('mousedown', handleMouseDown);
+      container.addEventListener('mousemove', handleMouseMove);
+      container.addEventListener('mouseup', handleMouseUp);
+      container.addEventListener('mouseleave', handleMouseUp);
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
+    }
+    
+    return () => {
+      if (container) {
+        container.removeEventListener('mousedown', handleMouseDown);
+        container.removeEventListener('mousemove', handleMouseMove);
+        container.removeEventListener('mouseup', handleMouseUp);
+        container.removeEventListener('mouseleave', handleMouseUp);
+      }
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [tool]);
   
   return (
     <div 
@@ -357,6 +584,21 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
           Status: {loadingStatus}
         </div>
       )}
+      
+      {/* Zoom info overlay */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        padding: '5px 10px',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        color: '#fff',
+        borderRadius: '4px',
+        fontSize: '12px',
+        pointerEvents: 'none'
+      }}>
+        Ctrl+Scroll: Zoom • Ctrl+0: Reset Zoom
+      </div>
     </div>
   );
 };

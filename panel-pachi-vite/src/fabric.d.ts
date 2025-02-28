@@ -6,6 +6,12 @@ declare module 'fabric' {
     backgroundColor: string;
     width: number;
     height: number;
+    viewportTransform: number[];
+    clipPath: any;
+    selection: boolean;
+    preserveObjectStacking: boolean;
+    fireRightClick: boolean;
+    stopContextMenu: boolean;
     clear(): void;
     dispose(): void;
     getElement(): HTMLCanvasElement;
@@ -17,6 +23,13 @@ declare module 'fabric' {
     on(event: string, callback: Function): void;
     off(event: string, callback: Function): void;
     getObjects(): any[];
+    setZoom(value: number): void;
+    absolutePan(point: { x: number, y: number }): void;
+    zoomToPoint(point: { x: number, y: number }, value: number): void;
+    getCenter(): { left: number, top: number };
+    getZoom(): number;
+    setViewportTransform(transform: number[]): void;
+    getPointer(e: { clientX: number, clientY: number }): { x: number, y: number };
   }
 
   export class BaseBrush {
@@ -55,5 +68,10 @@ declare module 'fabric' {
     angle: number;
     setCoords(): void;
     set(properties: any): Object;
+  }
+
+  export class Rect extends Object {
+    constructor(options?: any);
+    absolutePositioned: boolean;
   }
 } 
