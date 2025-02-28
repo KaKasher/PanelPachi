@@ -102,7 +102,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         
         setLoadingStatus("Initializing canvas...");
         
-        // Initialize canvas with larger size for better visibility
+        // Initialize canvas - we'll resize it when the image loads
         fabricCanvasRef.current = new Canvas(canvasRef.current, {
           isDrawingMode: tool === 'mask',
           backgroundColor: '#111',
@@ -233,34 +233,37 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
           // Clear the canvas
           canvas.clear();
           
-          // Get container dimensions - make sure these are correct
+          // Get container dimensions
           const containerWidth = containerRef.current.clientWidth;
           const containerHeight = containerRef.current.clientHeight;
           
-          setLoadingStatus(`Container: ${containerWidth}x${containerHeight}`);
-          
-          // Make sure canvas is sized correctly to container
-          canvas.setWidth(containerWidth);
-          canvas.setHeight(containerHeight);
-          
-          // Get image dimensions - handle case where fabric doesn't have dimensions
+          // Get image dimensions
           const imgWidth = fabricImg.width || htmlImg.width || 800;
           const imgHeight = fabricImg.height || htmlImg.height || 600;
           
           setLoadingStatus(`Image: ${imgWidth}x${imgHeight}`);
           
-          // Calculate scale to fill more of the container (maximize display size)
+          // Calculate scale to fit in the container while maintaining aspect ratio
           const scaleWidth = containerWidth / imgWidth;
           const scaleHeight = containerHeight / imgHeight;
-          let scale = Math.min(scaleWidth, scaleHeight);
+          const scale = Math.min(scaleWidth, scaleHeight) * 0.95; // 95% of container to leave margin
           
-          // Scale to 95% of the container to leave some margin
-          scale = scale * 0.95;
+          // Calculate the scaled dimensions
+          const scaledWidth = Math.round(imgWidth * scale);
+          const scaledHeight = Math.round(imgHeight * scale);
           
-          setLoadingStatus(`Scale: ${scale.toFixed(2)}`);
+          setLoadingStatus(`Scaled dimensions: ${scaledWidth}x${scaledHeight}`);
           
-          // Apply scale and add to canvas
+          // IMPORTANT: Resize the canvas to match the scaled image dimensions
+          // This ensures users can only draw within the image area
+          canvas.setWidth(scaledWidth);
+          canvas.setHeight(scaledHeight);
+          
+          // Scale the image to fit exactly in the canvas
+          // Use the scale method as defined in the Fabric.js type definition
           fabricImg.scale(scale);
+          
+          // Center the image in the canvas (should fill it exactly)
           canvas.add(fabricImg);
           canvas.centerObject(fabricImg);
           
@@ -291,6 +294,8 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
             imgWidth,
             imgHeight,
             scale,
+            scaledWidth,
+            scaledHeight,
             imageUrlLength: imageUrl.length,
             htmlImgComplete: htmlImg.complete,
             htmlImgSize: `${htmlImg.width}x${htmlImg.height}`
@@ -334,7 +339,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({ image, tool }) => {
         position: 'relative'
       }}
     >
-      <canvas ref={canvasRef} />
+      <canvas ref={canvasRef} style={{ maxWidth: '100%', maxHeight: '100%' }} />
       
       {/* Loading status overlay */}
       {loadingStatus && (
