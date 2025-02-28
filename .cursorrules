@@ -13,3 +13,9 @@ This project is a web application that will allow the user to:
 - React with TypeScript
 - Fabric.js for the canvas
 - other libraries as needed
+
+# STYLE
+- Use comments to explain "why" behind the code in more complex functions
+- Keep code DRY (Don't Repeat Yourself)
+- Keep code clean and easy to understand
+- Keep code modular and easy to maintain
