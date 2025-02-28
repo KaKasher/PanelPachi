@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './App.css';
 import ImageUploader from './components/ImageUploader';
 import CanvasEditor from './components/CanvasEditor';
 import Toolbar from './components/Toolbar';
-import { Button, ThemeProvider, createTheme, Tooltip } from '@mui/material';
+import { Button, ThemeProvider, createTheme, Tooltip, Snackbar, Alert } from '@mui/material';
 import { RestartAlt, Info } from '@mui/icons-material';
 
 // Create a dark theme for MUI components
@@ -23,6 +23,11 @@ function App() {
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [currentTool, setCurrentTool] = useState<string>('mask');
   const [isOverflowing, setIsOverflowing] = useState<boolean>(false);
+  const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
+  const [snackbarMessage, setSnackbarMessage] = useState<string>('');
+  
+  // Create a ref for the CanvasEditor component
+  const canvasEditorRef = useRef<any>(null);
 
   // Check for overflow on mount and window resize
   useEffect(() => {
@@ -59,6 +64,25 @@ function App() {
 
   const handleReset = () => {
     setUploadedImage(null);
+  };
+  
+  // Handle export mask functionality
+  const handleExportMask = () => {
+    if (canvasEditorRef.current && typeof canvasEditorRef.current.exportMask === 'function') {
+      canvasEditorRef.current.exportMask()
+        .then(() => {
+          setSnackbarMessage("Mask exported successfully!");
+          setSnackbarOpen(true);
+        })
+        .catch((error: any) => {
+          setSnackbarMessage(`Export failed: ${error.message || 'Unknown error'}`);
+          setSnackbarOpen(true);
+        });
+    }
+  };
+  
+  const handleSnackbarClose = () => {
+    setSnackbarOpen(false);
   };
 
   return (
@@ -101,7 +125,8 @@ function App() {
               }}>
                 <Toolbar 
                   currentTool={currentTool} 
-                  onToolChange={setCurrentTool} 
+                  onToolChange={setCurrentTool}
+                  onExportMask={handleExportMask}
                 />
                 
                 <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -129,6 +154,7 @@ function App() {
                 position: 'relative'
               }}>
                 <CanvasEditor 
+                  ref={canvasEditorRef}
                   image={uploadedImage} 
                   tool={currentTool} 
                 />
@@ -177,6 +203,22 @@ function App() {
             Warning: Content may not fit screen
           </div>
         )}
+        
+        {/* Success notification */}
+        <Snackbar 
+          open={snackbarOpen} 
+          autoHideDuration={4000} 
+          onClose={handleSnackbarClose}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert 
+            onClose={handleSnackbarClose} 
+            severity={snackbarMessage.includes('failed') ? 'error' : 'success'} 
+            sx={{ width: '100%' }}
+          >
+            {snackbarMessage}
+          </Alert>
+        </Snackbar>
       </div>
     </ThemeProvider>
   );

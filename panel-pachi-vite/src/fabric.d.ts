@@ -17,6 +17,8 @@ declare module 'fabric' {
     getElement(): HTMLCanvasElement;
     setWidth(width: number): void;
     setHeight(height: number): void;
+    getWidth(): number;
+    getHeight(): number;
     add(object: any): void;
     centerObject(object: any): void;
     renderAll(): void;
@@ -66,6 +68,8 @@ declare module 'fabric' {
     scaleY: number;
     opacity: number;
     angle: number;
+    path?: any[];
+    strokeWidth?: number;
     setCoords(): void;
     set(properties: any): Object;
   }

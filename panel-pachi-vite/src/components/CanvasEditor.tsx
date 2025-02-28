@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FC } from 'react';
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import { Canvas, Image as FabricImage, PencilBrush, Rect } from 'fabric';
 
 interface CanvasEditorProps {
@@ -6,12 +6,20 @@ interface CanvasEditorProps {
   tool: string;
 }
 
-const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
+// Create a type for the functions that will be exposed via the ref
+export interface CanvasEditorRef {
+  exportMask: () => void;
+}
+
+const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const brushSizeRef = useRef<number>(20);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
+  
+  // Store original image dimensions for export
+  const originalImageDimensionsRef = useRef<{ width: number, height: number } | null>(null);
   
   // Add ref to track zoom level
   const zoomRef = useRef<number>(1);
@@ -19,6 +27,200 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
   // Add a ref to track pan position
   const panPositionRef = useRef({ x: 0, y: 0 });
   const isPanningRef = useRef(false);
+  
+  // Expose the exportMask function to the parent component via ref
+  useImperativeHandle(ref, () => ({
+    exportMask: () => {
+      return exportMask();
+    }
+  }));
+  
+  // Function to export the mask
+  const exportMask = async (): Promise<void> => {
+    return new Promise<void>(async (resolve, reject) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) {
+        setLoadingStatus("Canvas not available for export");
+        reject(new Error("Canvas not available for export"));
+        return;
+      }
+      
+      try {
+        setLoadingStatus("Exporting mask...");
+        
+        // Get the original dimensions of the image
+        const originalDimensions = originalImageDimensionsRef.current;
+        if (!originalDimensions) {
+          setLoadingStatus("Original image dimensions not available");
+          reject(new Error("Original image dimensions not available"));
+          return;
+        }
+        
+        // Create a new canvas with original image dimensions
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = originalDimensions.width;
+        exportCanvas.height = originalDimensions.height;
+        const exportCtx = exportCanvas.getContext('2d');
+        
+        if (!exportCtx) {
+          setLoadingStatus("Failed to create export context");
+          reject(new Error("Failed to create export context"));
+          return;
+        }
+        
+        // Fill the canvas with black background
+        exportCtx.fillStyle = '#000000';
+        exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        
+        // Set all drawn content to white
+        exportCtx.fillStyle = '#ffffff';
+        exportCtx.strokeStyle = '#ffffff';
+        
+        // Get all objects from the canvas (excluding the background image)
+        const objects = canvas.getObjects().filter(obj => !(obj instanceof FabricImage));
+        
+        // If no drawings, alert the user and exit
+        if (objects.length === 0) {
+          setLoadingStatus("No mask drawn yet!");
+          setTimeout(() => {
+            if (loadingStatus && loadingStatus.includes("No mask")) {
+              setLoadingStatus("");
+            }
+          }, 1500);
+          reject(new Error("No mask drawn yet"));
+          return;
+        }
+        
+        // Convert Fabric paths to canvas paths
+        const currentZoom = canvas.getZoom();
+        const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+        
+        // Reset zoom and transform for accurate export
+        canvas.setZoom(1);
+        const originalVpt = [...vpt];
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        
+        // Get scale factor between canvas size and original image size
+        const canvasWidth = canvas.getWidth();
+        const canvasHeight = canvas.getHeight();
+        const scaleX = originalDimensions.width / canvasWidth;
+        const scaleY = originalDimensions.height / canvasHeight;
+        
+        // Draw all paths to the export canvas in white
+        objects.forEach(obj => {
+          // Skip non-path objects
+          if (!obj.path) return;
+          
+          exportCtx.beginPath();
+          
+          // Scale and adjust path coordinates
+          obj.path.forEach((pathCmd: any, i: number) => {
+            if (i === 0) {
+              // First command is always a move
+              exportCtx.moveTo(pathCmd[1] * scaleX, pathCmd[2] * scaleY);
+            } else {
+              // Line commands
+              if (pathCmd[0] === 'L') {
+                exportCtx.lineTo(pathCmd[1] * scaleX, pathCmd[2] * scaleY);
+              }
+              // Quadratic curve commands
+              else if (pathCmd[0] === 'Q') {
+                exportCtx.quadraticCurveTo(
+                  pathCmd[1] * scaleX, pathCmd[2] * scaleY,
+                  pathCmd[3] * scaleX, pathCmd[4] * scaleY
+                );
+              }
+              // Cubic curve commands
+              else if (pathCmd[0] === 'C') {
+                exportCtx.bezierCurveTo(
+                  pathCmd[1] * scaleX, pathCmd[2] * scaleY,
+                  pathCmd[3] * scaleX, pathCmd[4] * scaleY,
+                  pathCmd[5] * scaleX, pathCmd[6] * scaleY
+                );
+              }
+            }
+          });
+          
+          // Apply the line width scaled proportionally
+          exportCtx.lineWidth = (obj.strokeWidth || 1) * scaleX;
+          exportCtx.lineCap = 'round';
+          exportCtx.lineJoin = 'round';
+          exportCtx.stroke();
+        });
+        
+        // Restore canvas zoom and transform
+        canvas.setZoom(currentZoom);
+        canvas.setViewportTransform(originalVpt);
+        
+        // Convert the export canvas to a data URL
+        const dataUrl = exportCanvas.toDataURL('image/png');
+        
+        // Generate a filename based on the original image name or default
+        const originalFileName = image?.name || 'image.png';
+        const fileNameWithoutExt = originalFileName.substring(0, originalFileName.lastIndexOf('.')) || 'image';
+        const filename = `${fileNameWithoutExt}_mask.png`;
+        
+        // Try to use the File System Access API if available
+        try {
+          // Convert data URL to Blob
+          const fetchResponse = await fetch(dataUrl);
+          const blob = await fetchResponse.blob();
+          
+          // Try using showSaveFilePicker if available (modern browsers)
+          if ('showSaveFilePicker' in window) {
+            const fileHandle = await (window as any).showSaveFilePicker({
+              suggestedName: filename,
+              types: [{
+                description: 'PNG Image',
+                accept: { 'image/png': ['.png'] },
+              }],
+            });
+            
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            
+            setLoadingStatus("Mask saved successfully");
+          } else {
+            // Fallback to traditional download
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            setLoadingStatus("Mask exported successfully");
+          }
+        } catch (fileError) {
+          console.error("File system error:", fileError);
+          
+          // Fallback method if File System Access API fails
+          const link = document.createElement('a');
+          link.href = dataUrl;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          setLoadingStatus("Mask exported using fallback method");
+        }
+        
+        setTimeout(() => {
+          if (loadingStatus && (loadingStatus.includes("exported") || loadingStatus.includes("saved"))) {
+            setLoadingStatus("");
+          }
+        }, 1500);
+        
+        resolve();
+        
+      } catch (error) {
+        console.error("Error exporting mask:", error);
+        setLoadingStatus(`Error exporting mask: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        reject(error);
+      }
+    });
+  };
   
   // Add a style element to force cursor inheritance in all canvas elements
   useEffect(() => {
@@ -108,7 +310,7 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
     // Calculate new zoom level
     let newZoom = currentZoom * zoomFactor;
     
-    // Clamp zoom level to reasonable limits (1x to 4x)
+    // Clamp zoom level to reasonable limits (0.5x to 4x)
     newZoom = Math.min(Math.max(newZoom, 0.5), 4);
     
     // Don't do anything if we're already at the limit
@@ -359,6 +561,12 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
           const fabricImg = new FabricImage(htmlImg);
           const canvas = fabricCanvasRef.current;
           
+          // Store original image dimensions for export
+          originalImageDimensionsRef.current = {
+            width: htmlImg.width,
+            height: htmlImg.height
+          };
+          
           // Clear the canvas
           canvas.clear();
           
@@ -601,6 +809,6 @@ const CanvasEditor: FC<CanvasEditorProps> = ({ image, tool }) => {
       </div>
     </div>
   );
-};
+});
 
 export default CanvasEditor; 

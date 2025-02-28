@@ -1,13 +1,14 @@
 import { type FC } from 'react';
-import { Brush } from '@mui/icons-material';
+import { Brush, Save } from '@mui/icons-material';
 import { Tooltip, Button, ButtonGroup, Typography, Box } from '@mui/material';
 
 interface ToolbarProps {
   currentTool: string;
   onToolChange: (tool: string) => void;
+  onExportMask?: () => void;
 }
 
-const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
+const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask }) => {
   return (
     <Box sx={{
       display: 'flex',
@@ -36,6 +37,18 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange }) => {
           </Button>
         </Tooltip>
       </ButtonGroup>
+      
+      <Button
+        variant="contained"
+        color="primary"
+        startIcon={<Save fontSize="small" />}
+        size="small"
+        onClick={onExportMask}
+        disabled={!onExportMask}
+        sx={{ ml: 1 }}
+      >
+        Export Mask
+      </Button>
       
       <Box sx={{ 
         display: 'flex', 
