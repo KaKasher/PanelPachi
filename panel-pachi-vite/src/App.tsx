@@ -71,11 +71,11 @@ function App() {
     if (canvasEditorRef.current && typeof canvasEditorRef.current.exportMask === 'function') {
       canvasEditorRef.current.exportMask()
         .then(() => {
-          setSnackbarMessage("Mask exported successfully!");
+          setSnackbarMessage("Inpainting completed successfully!");
           setSnackbarOpen(true);
         })
         .catch((error: any) => {
-          setSnackbarMessage(`Export failed: ${error.message || 'Unknown error'}`);
+          setSnackbarMessage(`Inpainting failed: ${error.message || 'Unknown error'}`);
           setSnackbarOpen(true);
         });
     }

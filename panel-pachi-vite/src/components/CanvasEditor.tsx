@@ -8,8 +8,11 @@ interface CanvasEditorProps {
 
 // Create a type for the functions that will be exposed via the ref
 export interface CanvasEditorRef {
-  exportMask: () => void;
+  exportMask: () => Promise<void>;
 }
+
+// Add API URL configuration
+const API_URL = 'http://localhost:8000';
 
 const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,14 +31,282 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const panPositionRef = useRef({ x: 0, y: 0 });
   const isPanningRef = useRef(false);
   
+  // Store the original image for comparison
+  const originalImageDataRef = useRef<string | null>(null);
+  // Store a reference to the original image file
+  const originalImageFileRef = useRef<File | null>(null);
+  
   // Expose the exportMask function to the parent component via ref
   useImperativeHandle(ref, () => ({
     exportMask: () => {
-      return exportMask();
+      return inpaintImage();
     }
   }));
   
-  // Function to export the mask
+  // Update the original image file reference when the image prop changes
+  useEffect(() => {
+    if (image) {
+      originalImageFileRef.current = image;
+    }
+  }, [image]);
+  
+  // Function to inpaint the image
+  const inpaintImage = async (): Promise<void> => {
+    return new Promise<void>(async (resolve, reject) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) {
+        setLoadingStatus("Canvas not available for inpainting");
+        reject(new Error("Canvas not available for inpainting"));
+        return;
+      }
+      
+      try {
+        setLoadingStatus("Processing inpainting...");
+        
+        // Get the original dimensions of the image
+        const originalDimensions = originalImageDimensionsRef.current;
+        if (!originalDimensions) {
+          setLoadingStatus("Original image dimensions not available");
+          reject(new Error("Original image dimensions not available"));
+          return;
+        }
+        
+        // Create a new canvas with original image dimensions for the mask
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = originalDimensions.width;
+        exportCanvas.height = originalDimensions.height;
+        const exportCtx = exportCanvas.getContext('2d');
+        
+        if (!exportCtx) {
+          setLoadingStatus("Failed to create export context");
+          reject(new Error("Failed to create export context"));
+          return;
+        }
+        
+        // Fill the canvas with black background
+        exportCtx.fillStyle = '#000000';
+        exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        
+        // Set all drawn content to white
+        exportCtx.fillStyle = '#ffffff';
+        exportCtx.strokeStyle = '#ffffff';
+        
+        // Get all objects from the canvas (excluding the background image)
+        const objects = canvas.getObjects().filter(obj => !(obj instanceof FabricImage));
+        
+        // If no drawings, alert the user and exit
+        if (objects.length === 0) {
+          setLoadingStatus("No mask drawn yet!");
+          setTimeout(() => {
+            if (loadingStatus && loadingStatus.includes("No mask")) {
+              setLoadingStatus("");
+            }
+          }, 1500);
+          reject(new Error("No mask drawn yet"));
+          return;
+        }
+        
+        // Convert Fabric paths to canvas paths
+        const currentZoom = canvas.getZoom();
+        const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+        
+        // Reset zoom and transform for accurate export
+        canvas.setZoom(1);
+        const originalVpt = [...vpt];
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        
+        // Get scale factor between canvas size and original image size
+        const canvasWidth = canvas.getWidth();
+        const canvasHeight = canvas.getHeight();
+        const scaleX = originalDimensions.width / canvasWidth;
+        const scaleY = originalDimensions.height / canvasHeight;
+        
+        // Draw all paths to the export canvas in white
+        objects.forEach(obj => {
+          // Skip non-path objects
+          if (!obj.path) return;
+          
+          exportCtx.beginPath();
+          
+          // Scale and adjust path coordinates
+          obj.path.forEach((pathCmd: any, i: number) => {
+            if (i === 0) {
+              // First command is always a move
+              exportCtx.moveTo(pathCmd[1] * scaleX, pathCmd[2] * scaleY);
+            } else {
+              // Line commands
+              if (pathCmd[0] === 'L') {
+                exportCtx.lineTo(pathCmd[1] * scaleX, pathCmd[2] * scaleY);
+              }
+              // Quadratic curve commands
+              else if (pathCmd[0] === 'Q') {
+                exportCtx.quadraticCurveTo(
+                  pathCmd[1] * scaleX, pathCmd[2] * scaleY,
+                  pathCmd[3] * scaleX, pathCmd[4] * scaleY
+                );
+              }
+              // Cubic curve commands
+              else if (pathCmd[0] === 'C') {
+                exportCtx.bezierCurveTo(
+                  pathCmd[1] * scaleX, pathCmd[2] * scaleY,
+                  pathCmd[3] * scaleX, pathCmd[4] * scaleY,
+                  pathCmd[5] * scaleX, pathCmd[6] * scaleY
+                );
+              }
+            }
+          });
+          
+          // Apply the line width scaled proportionally
+          exportCtx.lineWidth = (obj.strokeWidth || 1) * scaleX;
+          exportCtx.lineCap = 'round';
+          exportCtx.lineJoin = 'round';
+          exportCtx.stroke();
+        });
+        
+        // Restore canvas zoom and transform
+        canvas.setZoom(currentZoom);
+        canvas.setViewportTransform(originalVpt);
+        
+        // Get the mask data URL
+        const maskDataUrl = exportCanvas.toDataURL('image/png');
+        
+        // Convert the mask data URL to a Blob
+        const maskBlob = await fetch(maskDataUrl).then(r => r.blob());
+        
+        // Prepare form data for API request
+        const formData = new FormData();
+        
+        // Use the original file directly
+        if (originalImageFileRef.current) {
+          formData.append('image', originalImageFileRef.current);
+          console.log("Using original image file:", originalImageFileRef.current.name, originalImageFileRef.current.size);
+        } else {
+          setLoadingStatus("Error: Original image file not available");
+          reject(new Error("Original image file not available"));
+          return;
+        }
+        
+        formData.append('mask', maskBlob, 'mask.png');
+        
+        // Send to the inpainting API
+        setLoadingStatus("Sending to AI model...");
+        const response = await fetch(`${API_URL}/inpaint`, {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API error (${response.status}): ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        console.log("API Response:", data);
+        
+        if (!data.success) {
+          throw new Error(`Inpainting failed: ${data.message}`);
+        }
+        
+        setLoadingStatus("Applying inpainted result...");
+        
+        // Convert the base64 image to a URL with the correct format
+        const imageFormat = data.format || 'png';
+        const inpaintedImageUrl = `data:image/${imageFormat};base64,${data.image}`;
+        console.log("Created image URL with format:", imageFormat);
+        
+        // Also download the inpainted image for debugging
+        const downloadInpaintedImage = () => {
+          const link = document.createElement('a');
+          link.href = inpaintedImageUrl;
+          link.download = 'inpainted-image.' + imageFormat;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        };
+        
+        // Auto-download the image for debugging
+        downloadInpaintedImage();
+        
+        // Simplest approach: Clear and create a new image
+        console.log("Attempting to update canvas with new image");
+        
+        // Clear all objects first
+        if (fabricCanvasRef.current) {
+          fabricCanvasRef.current.clear();
+          console.log("Canvas cleared");
+          
+          // Create a new image using a promise
+          await new Promise<void>((resolveImgLoad, rejectImgLoad) => {
+            const newImg = new Image();
+            newImg.crossOrigin = "Anonymous";
+            
+            newImg.onload = () => {
+              console.log("New image loaded:", newImg.width, "x", newImg.height);
+              
+              try {
+                const fabricImg = new FabricImage(newImg);
+                fabricImg.set({
+                  selectable: false,
+                  evented: false
+                });
+                
+                // Scale to fit canvas
+                const canvasWidth = fabricCanvasRef.current?.getWidth() || 500;
+                const canvasHeight = fabricCanvasRef.current?.getHeight() || 500;
+                const scale = Math.min(
+                  canvasWidth / newImg.width,
+                  canvasHeight / newImg.height
+                );
+                
+                fabricImg.scale(scale);
+                
+                // Center the image on the canvas
+                fabricImg.set({
+                  left: canvasWidth / 2,
+                  top: canvasHeight / 2,
+                  originX: 'center',
+                  originY: 'center'
+                });
+                
+                fabricCanvasRef.current?.add(fabricImg);
+                fabricCanvasRef.current?.renderAll();
+                console.log("Added new image to canvas");
+                
+                resolveImgLoad();
+              } catch (err) {
+                console.error("Error adding image to canvas:", err);
+                rejectImgLoad(err);
+              }
+            };
+            
+            newImg.onerror = (err) => {
+              console.error("Error loading new image:", err);
+              rejectImgLoad(err);
+            };
+            
+            newImg.src = inpaintedImageUrl;
+          });
+          
+          console.log("Canvas update completed");
+        }
+        
+        setLoadingStatus("Inpainting complete!");
+        setTimeout(() => {
+          setLoadingStatus("");
+        }, 1500);
+        
+        resolve();
+      
+      } catch (error) {
+        console.error("Error inpainting image:", error);
+        setLoadingStatus(`Error inpainting: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        reject(error);
+      }
+    });
+  };
+  
+  // Function to export the mask - kept for reference but no longer used
   const exportMask = async (): Promise<void> => {
     return new Promise<void>(async (resolve, reject) => {
       const canvas = fabricCanvasRef.current;

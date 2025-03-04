@@ -1,0 +1,7 @@
+fastapi>=0.104.0
+uvicorn>=0.23.2
+python-multipart>=0.0.6
+Pillow>=10.0.0
+numpy>=1.19.0
+python-dotenv>=1.0.0
+opencv-python>=4.5.0

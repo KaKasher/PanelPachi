@@ -1,0 +1,4 @@
+# Start Generation Here
+.venv/
+__pycache__/
+ai-services/models/inpainting/anime-manga-big-lama.pt

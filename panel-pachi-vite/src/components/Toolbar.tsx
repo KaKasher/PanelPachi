@@ -1,5 +1,5 @@
 import { type FC } from 'react';
-import { Brush, Save } from '@mui/icons-material';
+import { Brush, Save, AutoFixHigh } from '@mui/icons-material';
 import { Tooltip, Button, ButtonGroup, Typography, Box } from '@mui/material';
 
 interface ToolbarProps {
@@ -41,13 +41,13 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask }) 
       <Button
         variant="contained"
         color="primary"
-        startIcon={<Save fontSize="small" />}
+        startIcon={<AutoFixHigh fontSize="small" />}
         size="small"
         onClick={onExportMask}
         disabled={!onExportMask}
         sx={{ ml: 1 }}
       >
-        Export Mask
+        Inpaint
       </Button>
       
       <Box sx={{ 
