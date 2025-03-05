@@ -1,14 +1,15 @@
 import { type FC } from 'react';
 import { Brush, Save, AutoFixHigh } from '@mui/icons-material';
-import { Tooltip, Button, ButtonGroup, Typography, Box } from '@mui/material';
+import { Tooltip, Button, ButtonGroup, Typography, Box, CircularProgress } from '@mui/material';
 
 interface ToolbarProps {
   currentTool: string;
   onToolChange: (tool: string) => void;
   onExportMask?: () => void;
+  isInpainting?: boolean;
 }
 
-const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask }) => {
+const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask, isInpainting = false }) => {
   return (
     <Box sx={{
       display: 'flex',
@@ -32,6 +33,7 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask }) 
             onClick={() => onToolChange('mask')}
             startIcon={<Brush fontSize="small" />}
             size="small"
+            disabled={isInpainting}
           >
             Mask
           </Button>
@@ -41,13 +43,17 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask }) 
       <Button
         variant="contained"
         color="primary"
-        startIcon={<AutoFixHigh fontSize="small" />}
+        startIcon={isInpainting ? (
+          <CircularProgress size={16} color="inherit" />
+        ) : (
+          <AutoFixHigh fontSize="small" />
+        )}
         size="small"
         onClick={onExportMask}
-        disabled={!onExportMask}
+        disabled={!onExportMask || isInpainting}
         sx={{ ml: 1 }}
       >
-        Inpaint
+        {isInpainting ? 'Processing...' : 'Inpaint'}
       </Button>
       
       <Box sx={{ 

@@ -20,6 +20,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const containerRef = useRef<HTMLDivElement>(null);
   const brushSizeRef = useRef<number>(20);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [isInpainting, setIsInpainting] = useState<boolean>(false);
   
   // Store original image dimensions for export
   const originalImageDimensionsRef = useRef<{ width: number, height: number } | null>(null);
@@ -35,6 +36,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const originalImageDataRef = useRef<string | null>(null);
   // Store a reference to the original image file
   const originalImageFileRef = useRef<File | null>(null);
+  // Store the current inpainted image as a blob
+  const currentImageBlobRef = useRef<Blob | null>(null);
   
   // Expose the exportMask function to the parent component via ref
   useImperativeHandle(ref, () => ({
@@ -47,6 +50,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   useEffect(() => {
     if (image) {
       originalImageFileRef.current = image;
+      // Reset the current image blob when a new image is uploaded
+      currentImageBlobRef.current = null;
     }
   }, [image]);
   
@@ -61,12 +66,14 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       }
       
       try {
+        setIsInpainting(true);
         setLoadingStatus("Processing inpainting...");
         
         // Get the original dimensions of the image
         const originalDimensions = originalImageDimensionsRef.current;
         if (!originalDimensions) {
           setLoadingStatus("Original image dimensions not available");
+          setIsInpainting(false);
           reject(new Error("Original image dimensions not available"));
           return;
         }
@@ -79,6 +86,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         
         if (!exportCtx) {
           setLoadingStatus("Failed to create export context");
+          setIsInpainting(false);
           reject(new Error("Failed to create export context"));
           return;
         }
@@ -102,6 +110,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
               setLoadingStatus("");
             }
           }, 1500);
+          setIsInpainting(false);
           reject(new Error("No mask drawn yet"));
           return;
         }
@@ -176,13 +185,19 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Prepare form data for API request
         const formData = new FormData();
         
-        // Use the original file directly
-        if (originalImageFileRef.current) {
+        // Use the current inpainted image if available, otherwise use the original image
+        if (currentImageBlobRef.current) {
+          // Use the latest inpainted image
+          formData.append('image', currentImageBlobRef.current, 'current_image.png');
+          console.log("Using current inpainted image");
+        } else if (originalImageFileRef.current) {
+          // Use the original image file if no inpainted image exists yet
           formData.append('image', originalImageFileRef.current);
           console.log("Using original image file:", originalImageFileRef.current.name, originalImageFileRef.current.size);
         } else {
-          setLoadingStatus("Error: Original image file not available");
-          reject(new Error("Original image file not available"));
+          setLoadingStatus("Error: No image available for inpainting");
+          setIsInpainting(false);
+          reject(new Error("No image available for inpainting"));
           return;
         }
         
@@ -214,6 +229,13 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         const imageFormat = data.format || 'png';
         const inpaintedImageUrl = `data:image/${imageFormat};base64,${data.image}`;
         console.log("Created image URL with format:", imageFormat);
+        
+        // Convert the base64 image to a Blob for future inpainting
+        const base64Response = await fetch(inpaintedImageUrl);
+        const newImageBlob = await base64Response.blob();
+        
+        // Store the current inpainted image for future inpainting
+        currentImageBlobRef.current = newImageBlob;
         
         // Also download the inpainted image for debugging
         const downloadInpaintedImage = () => {
@@ -296,11 +318,13 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           setLoadingStatus("");
         }, 1500);
         
+        setIsInpainting(false);
         resolve();
       
       } catch (error) {
         console.error("Error inpainting image:", error);
         setLoadingStatus(`Error inpainting: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setIsInpainting(false);
         reject(error);
       }
     });
@@ -688,9 +712,52 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     }
   }, [tool]); // Only depend on tool, not on brushSize
   
+  // Update tool when it changes
+  useEffect(() => {
+    if (fabricCanvasRef.current) {
+      // Only enable drawing mode if not currently inpainting
+      fabricCanvasRef.current.isDrawingMode = tool === 'mask' && !isInpainting;
+      
+      // Make sure we update the brush when tool changes
+      if (tool === 'mask' && fabricCanvasRef.current.freeDrawingBrush && !isInpainting) {
+        fabricCanvasRef.current.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
+        fabricCanvasRef.current.freeDrawingBrush.width = brushSizeRef.current;
+        
+        // Update cursor
+        updateBrushCursor(brushSizeRef.current);
+      } else {
+        // Reset cursor
+        if (containerRef.current) {
+          containerRef.current.style.cursor = isInpainting ? 'wait' : 'default';
+        }
+      }
+    }
+  }, [tool, isInpainting]); // Depend on both tool and isInpainting
+  
+  // Effect to update drawing mode based on isInpainting state
+  useEffect(() => {
+    if (fabricCanvasRef.current) {
+      // Disable drawing mode when inpainting
+      if (isInpainting) {
+        fabricCanvasRef.current.isDrawingMode = false;
+      } else if (tool === 'mask') {
+        fabricCanvasRef.current.isDrawingMode = true;
+        
+        if (fabricCanvasRef.current.freeDrawingBrush) {
+          fabricCanvasRef.current.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
+          fabricCanvasRef.current.freeDrawingBrush.width = brushSizeRef.current;
+          updateBrushCursor(brushSizeRef.current);
+        }
+      }
+    }
+  }, [isInpainting, tool]);
+  
   // Wheel event for brush size and zooming
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       // Prevent the default behavior first to avoid page scrolling
       e.preventDefault();
       
@@ -709,6 +776,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     
     // Add keydown and keyup event to show visual feedback when Ctrl is pressed
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       // Handle Ctrl key press for cursor change
       if (e.key === 'Control' || e.key === 'Meta') {
         setLoadingStatus('Ready to zoom (Ctrl+Scroll)');
@@ -731,6 +801,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       if (e.key === 'Control' || e.key === 'Meta') {
         setLoadingStatus('');
         if (!containerRef.current) return;
@@ -759,7 +832,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keyup', handleKeyUp);
     };
-  }, [tool]); // Only depend on tool
+  }, [tool, isInpainting]); // Depend on both tool and isInpainting
   
   // Handle window resize
   useEffect(() => {
@@ -777,27 +850,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-  
-  // Update tool when it changes
-  useEffect(() => {
-    if (fabricCanvasRef.current) {
-      fabricCanvasRef.current.isDrawingMode = tool === 'mask';
-      
-      // Make sure we update the brush when tool changes
-      if (tool === 'mask' && fabricCanvasRef.current.freeDrawingBrush) {
-        fabricCanvasRef.current.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
-        fabricCanvasRef.current.freeDrawingBrush.width = brushSizeRef.current;
-        
-        // Update cursor
-        updateBrushCursor(brushSizeRef.current);
-      } else {
-        // Reset cursor
-        if (containerRef.current) {
-          containerRef.current.style.cursor = 'default';
-        }
-      }
-    }
-  }, [tool]); // Only depend on tool, not brushSize
   
   // Load the image when it changes
   useEffect(() => {
@@ -933,6 +985,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   // Add mouse events for panning
   useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       // Only allow panning with space bar held or middle mouse button
       if (e.button === 1 || (e.button === 0 && e.getModifierState('Space'))) {
         if (containerRef.current) {
@@ -944,6 +999,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     };
     
     const handleMouseMove = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       const canvas = fabricCanvasRef.current;
       if (!canvas || !isPanningRef.current) return;
       
@@ -973,6 +1031,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     };
     
     const handleMouseUp = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       isPanningRef.current = false;
       
       if (containerRef.current) {
@@ -988,6 +1049,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     };
     
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       if (e.code === 'Space') {
         if (containerRef.current) {
           containerRef.current.style.cursor = 'grab';
@@ -996,6 +1060,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
       if (e.code === 'Space') {
         if (containerRef.current) {
           if (tool === 'mask') {
@@ -1028,7 +1095,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keyup', handleKeyUp);
     };
-  }, [tool]);
+  }, [tool, isInpainting]);
   
   return (
     <div 
@@ -1042,10 +1109,38 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         alignItems: 'center',
         backgroundColor: '#111',
         overflow: 'hidden',
-        position: 'relative'
+        position: 'relative',
+        cursor: isInpainting ? 'wait' : undefined
       }}
     >
       <canvas ref={canvasRef} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+      
+      {/* Overlay to prevent interaction during inpainting */}
+      {isInpainting && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          zIndex: 100,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          pointerEvents: 'all'
+        }}>
+          <div style={{
+            padding: '10px 20px',
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            color: '#fff',
+            borderRadius: '4px',
+            fontSize: '14px'
+          }}>
+            Processing... Please wait
+          </div>
+        </div>
+      )}
       
       {/* Loading status overlay */}
       {loadingStatus && (

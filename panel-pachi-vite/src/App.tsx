@@ -25,6 +25,7 @@ function App() {
   const [isOverflowing, setIsOverflowing] = useState<boolean>(false);
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
+  const [isInpainting, setIsInpainting] = useState<boolean>(false);
   
   // Create a ref for the CanvasEditor component
   const canvasEditorRef = useRef<any>(null);
@@ -69,14 +70,17 @@ function App() {
   // Handle export mask functionality
   const handleExportMask = () => {
     if (canvasEditorRef.current && typeof canvasEditorRef.current.exportMask === 'function') {
+      setIsInpainting(true);
       canvasEditorRef.current.exportMask()
         .then(() => {
           setSnackbarMessage("Inpainting completed successfully!");
           setSnackbarOpen(true);
+          setIsInpainting(false);
         })
         .catch((error: any) => {
           setSnackbarMessage(`Inpainting failed: ${error.message || 'Unknown error'}`);
           setSnackbarOpen(true);
+          setIsInpainting(false);
         });
     }
   };
@@ -127,6 +131,7 @@ function App() {
                   currentTool={currentTool} 
                   onToolChange={setCurrentTool}
                   onExportMask={handleExportMask}
+                  isInpainting={isInpainting}
                 />
                 
                 <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -140,6 +145,7 @@ function App() {
                     startIcon={<RestartAlt />}
                     onClick={handleReset}
                     size="small"
+                    disabled={isInpainting}
                   >
                     New Image
                   </Button>
