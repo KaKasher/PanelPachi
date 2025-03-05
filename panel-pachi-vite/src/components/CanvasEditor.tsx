@@ -9,6 +9,7 @@ interface CanvasEditorProps {
 // Create a type for the functions that will be exposed via the ref
 export interface CanvasEditorRef {
   exportMask: () => Promise<void>;
+  undo: () => void;
 }
 
 // Add API URL configuration
@@ -21,6 +22,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const brushSizeRef = useRef<number>(20);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
   const [isInpainting, setIsInpainting] = useState<boolean>(false);
+  const isInpaintingRef = useRef<boolean>(false);
   
   // Store original image dimensions for export
   const originalImageDimensionsRef = useRef<{ width: number, height: number } | null>(null);
@@ -38,13 +40,57 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const originalImageFileRef = useRef<File | null>(null);
   // Store the current inpainted image as a blob
   const currentImageBlobRef = useRef<Blob | null>(null);
+  // Stack to track drawable objects for undo functionality
+  const historyStackRef = useRef<any[]>([]);
   
-  // Expose the exportMask function to the parent component via ref
+  // Expose functions to the parent component via ref
   useImperativeHandle(ref, () => ({
     exportMask: () => {
       return inpaintImage();
+    },
+    undo: () => {
+      undoLastAction();
     }
   }));
+  
+  // Function to undo the last action
+  const undoLastAction = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // If no history, nothing to undo
+    if (historyStackRef.current.length === 0) {
+      setLoadingStatus("Nothing to undo");
+      setTimeout(() => {
+        if (loadingStatus === "Nothing to undo") {
+          setLoadingStatus("");
+        }
+      }, 1500);
+      return;
+    }
+    
+    // Get the last object from the history stack
+    const lastObject = historyStackRef.current.pop();
+    
+    // Find the object on the canvas and remove it
+    const objects = canvas.getObjects();
+    for (let i = 0; i < objects.length; i++) {
+      if (objects[i] === lastObject) {
+        // Remove found object from canvas
+        canvas.remove(objects[i]);
+        canvas.renderAll();
+        break;
+      }
+    }
+    
+    setLoadingStatus("Undone last action");
+    setTimeout(() => {
+      if (loadingStatus === "Undone last action") {
+        setLoadingStatus("");
+      }
+    }, 1500);
+  };
   
   // Update the original image file reference when the image prop changes
   useEffect(() => {
@@ -52,6 +98,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       originalImageFileRef.current = image;
       // Reset the current image blob when a new image is uploaded
       currentImageBlobRef.current = null;
+      // Clear the history stack when a new image is loaded
+      historyStackRef.current = [];
     }
   }, [image]);
   
@@ -67,6 +115,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       
       try {
         setIsInpainting(true);
+        isInpaintingRef.current = true;
         setLoadingStatus("Processing inpainting...");
         
         // Get the original dimensions of the image
@@ -74,6 +123,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         if (!originalDimensions) {
           setLoadingStatus("Original image dimensions not available");
           setIsInpainting(false);
+          isInpaintingRef.current = false;
           reject(new Error("Original image dimensions not available"));
           return;
         }
@@ -87,6 +137,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         if (!exportCtx) {
           setLoadingStatus("Failed to create export context");
           setIsInpainting(false);
+          isInpaintingRef.current = false;
           reject(new Error("Failed to create export context"));
           return;
         }
@@ -111,6 +162,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             }
           }, 1500);
           setIsInpainting(false);
+          isInpaintingRef.current = false;
           reject(new Error("No mask drawn yet"));
           return;
         }
@@ -197,6 +249,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         } else {
           setLoadingStatus("Error: No image available for inpainting");
           setIsInpainting(false);
+          isInpaintingRef.current = false;
           reject(new Error("No image available for inpainting"));
           return;
         }
@@ -319,12 +372,14 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         }, 1500);
         
         setIsInpainting(false);
+        isInpaintingRef.current = false;
         resolve();
       
       } catch (error) {
         console.error("Error inpainting image:", error);
         setLoadingStatus(`Error inpainting: ${error instanceof Error ? error.message : 'Unknown error'}`);
         setIsInpainting(false);
+        isInpaintingRef.current = false;
         reject(error);
       }
     });
@@ -697,20 +752,34 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Initialize cursor
         updateBrushCursor(brushSizeRef.current);
         
+        // Define the path created handler
+        const handlePathCreated = (e: any) => {
+          // Only add to history if not currently inpainting
+          if (!isInpaintingRef.current) {
+            // Add the created path to the history stack
+            historyStackRef.current.push(e.path);
+          }
+        };
+        
+        // Add event listener for when a path is created
+        canvas.on('path:created', handlePathCreated);
+        
         setLoadingStatus("Canvas ready");
+        
+        return () => {
+          if (fabricCanvasRef.current) {
+            // Remove event listener with the exact same handler reference
+            fabricCanvasRef.current.off('path:created', handlePathCreated);
+            fabricCanvasRef.current.dispose();
+            fabricCanvasRef.current = null;
+          }
+        };
       } catch (error) {
         console.error("Error initializing canvas:", error);
         setLoadingStatus("Error initializing canvas");
       }
-      
-      return () => {
-        if (fabricCanvasRef.current) {
-          fabricCanvasRef.current.dispose();
-          fabricCanvasRef.current = null;
-        }
-      };
     }
-  }, [tool]); // Only depend on tool, not on brushSize
+  }, [tool]); // Only depend on tool, not isInpainting
   
   // Update tool when it changes
   useEffect(() => {
@@ -737,6 +806,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   // Effect to update drawing mode based on isInpainting state
   useEffect(() => {
     if (fabricCanvasRef.current) {
+      // Sync the ref with state
+      isInpaintingRef.current = isInpainting;
+      
       // Disable drawing mode when inpainting
       if (isInpainting) {
         fabricCanvasRef.current.isDrawingMode = false;
@@ -856,6 +928,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     if (!image) {
       return;
     }
+    
+    // Clear history when loading a new image
+    historyStackRef.current = [];
     
     setLoadingStatus("Loading image...");
     

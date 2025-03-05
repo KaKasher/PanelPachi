@@ -1,15 +1,16 @@
 import { type FC } from 'react';
-import { Brush, Save, AutoFixHigh } from '@mui/icons-material';
+import { Brush, Save, AutoFixHigh, Undo } from '@mui/icons-material';
 import { Tooltip, Button, ButtonGroup, Typography, Box, CircularProgress } from '@mui/material';
 
 interface ToolbarProps {
   currentTool: string;
   onToolChange: (tool: string) => void;
   onExportMask?: () => void;
+  onUndo?: () => void;
   isInpainting?: boolean;
 }
 
-const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask, isInpainting = false }) => {
+const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask, onUndo, isInpainting = false }) => {
   return (
     <Box sx={{
       display: 'flex',
@@ -54,6 +55,18 @@ const Toolbar: FC<ToolbarProps> = ({ currentTool, onToolChange, onExportMask, is
         sx={{ ml: 1 }}
       >
         {isInpainting ? 'Processing...' : 'Inpaint'}
+      </Button>
+      
+      <Button
+        variant="outlined"
+        color="primary"
+        startIcon={<Undo fontSize="small" />}
+        size="small"
+        onClick={onUndo}
+        disabled={!onUndo || isInpainting}
+        sx={{ ml: 1 }}
+      >
+        Undo
       </Button>
       
       <Box sx={{ 

@@ -85,6 +85,13 @@ function App() {
     }
   };
   
+  // Handle undo functionality
+  const handleUndo = () => {
+    if (canvasEditorRef.current && typeof canvasEditorRef.current.undo === 'function') {
+      canvasEditorRef.current.undo();
+    }
+  };
+  
   const handleSnackbarClose = () => {
     setSnackbarOpen(false);
   };
@@ -131,6 +138,7 @@ function App() {
                   currentTool={currentTool} 
                   onToolChange={setCurrentTool}
                   onExportMask={handleExportMask}
+                  onUndo={handleUndo}
                   isInpainting={isInpainting}
                 />
                 

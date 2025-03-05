@@ -20,6 +20,7 @@ declare module 'fabric' {
     getWidth(): number;
     getHeight(): number;
     add(object: any): void;
+    remove(object: any): void;
     centerObject(object: any): void;
     renderAll(): void;
     on(event: string, callback: Function): void;
