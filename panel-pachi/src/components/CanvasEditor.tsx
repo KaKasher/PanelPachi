@@ -1,0 +1,1041 @@
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { Canvas, Image as FabricImage, PencilBrush } from 'fabric';
+
+interface CanvasEditorProps {
+  image: File | null;
+  tool: string;
+}
+
+// Create a type for the functions that will be exposed via the ref
+export interface CanvasEditorRef {
+  exportMask: () => Promise<void>;
+  undo: () => void;
+}
+
+// Add API URL configuration
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool }, ref) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fabricCanvasRef = useRef<Canvas | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const brushSizeRef = useRef<number>(20);
+  const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [isInpainting, setIsInpainting] = useState<boolean>(false);
+  const isInpaintingRef = useRef<boolean>(false);
+  
+  // Store original image dimensions for export
+  const originalImageDimensionsRef = useRef<{ width: number, height: number } | null>(null);
+  
+  // Add ref to track zoom level
+  const zoomRef = useRef<number>(1);
+  
+  // Add a ref to track pan position
+  const panPositionRef = useRef({ x: 0, y: 0 });
+  const isPanningRef = useRef(false);
+  
+  // Store the original image for comparison
+  const originalImageDataRef = useRef<string | null>(null);
+  // Store a reference to the original image file
+  const originalImageFileRef = useRef<File | null>(null);
+  // Store the current inpainted image as a blob
+  const currentImageBlobRef = useRef<Blob | null>(null);
+  // Stack to track drawable objects for undo functionality
+  const historyStackRef = useRef<any[]>([]);
+  
+  // Expose functions to the parent component via ref
+  useImperativeHandle(ref, () => ({
+    exportMask: () => {
+      return inpaintImage();
+    },
+    undo: () => {
+      undoLastAction();
+    }
+  }));
+  
+  // Function to undo the last action
+  const undoLastAction = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // If no history, nothing to undo
+    if (historyStackRef.current.length === 0) {
+      setLoadingStatus("Nothing to undo");
+      setTimeout(() => {
+        if (loadingStatus === "Nothing to undo") {
+          setLoadingStatus("");
+        }
+      }, 1500);
+      return;
+    }
+    
+    // Get the last object from the history stack
+    const lastObject = historyStackRef.current.pop();
+    
+    // Find the object on the canvas and remove it
+    const objects = canvas.getObjects();
+    for (let i = 0; i < objects.length; i++) {
+      if (objects[i] === lastObject) {
+        // Remove found object from canvas
+        canvas.remove(objects[i]);
+        canvas.renderAll();
+        break;
+      }
+    }
+    
+    setLoadingStatus("Undone last action");
+    setTimeout(() => {
+      if (loadingStatus === "Undone last action") {
+        setLoadingStatus("");
+      }
+    }, 1500);
+  };
+  
+  // Update the original image file reference when the image prop changes
+  useEffect(() => {
+    if (image) {
+      originalImageFileRef.current = image;
+      // Reset the current image blob when a new image is uploaded
+      currentImageBlobRef.current = null;
+      // Clear the history stack when a new image is loaded
+      historyStackRef.current = [];
+    }
+  }, [image]);
+  
+  // Function to inpaint the image
+  const inpaintImage = async (): Promise<void> => {
+    return new Promise<void>(async (resolve, reject) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) {
+        setLoadingStatus("Canvas not available for inpainting");
+        reject(new Error("Canvas not available for inpainting"));
+        return;
+      }
+      
+      try {
+        setIsInpainting(true);
+        isInpaintingRef.current = true;
+        setLoadingStatus("Processing inpainting...");
+        
+        // Save current zoom and viewport transform
+        const currentZoom = canvas.getZoom();
+        const originalVpt = [...canvas.viewportTransform || [1, 0, 0, 1, 0, 0]];
+        
+        // Temporarily reset zoom for accurate export
+        canvas.setZoom(1);
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        
+        // Get the original dimensions of the image
+        const originalDimensions = originalImageDimensionsRef.current;
+        if (!originalDimensions) {
+          setLoadingStatus("Original image dimensions not available");
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          reject(new Error("Original image dimensions not available"));
+          return;
+        }
+        
+        // Create a new canvas with original image dimensions for the mask
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = originalDimensions.width;
+        exportCanvas.height = originalDimensions.height;
+        const exportCtx = exportCanvas.getContext('2d');
+        
+        if (!exportCtx) {
+          setLoadingStatus("Failed to create export context");
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          reject(new Error("Failed to create export context"));
+          return;
+        }
+        
+        // Fill the canvas with black background
+        exportCtx.fillStyle = '#000000';
+        exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        
+        // Set all drawn content to white
+        exportCtx.fillStyle = '#ffffff';
+        exportCtx.strokeStyle = '#ffffff'; // Set stroke color to white
+        
+        // Calculate scale factors to map from canvas coordinates to original image coordinates
+        const objects = canvas.getObjects();
+        const backgroundImage = objects.find(obj => obj instanceof FabricImage);
+        
+        if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
+          setLoadingStatus("Background image not found");
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          reject(new Error("Background image not found"));
+          return;
+        }
+        
+        // Get the background image scaling and dimensions
+        const imgWidth = backgroundImage.width || 1;
+        const imgHeight = backgroundImage.height || 1;
+        const imgScaleX = (backgroundImage as any).scaleX || 1;
+        const imgScaleY = (backgroundImage as any).scaleY || 1;
+        const imgLeft = backgroundImage.left || 0;
+        const imgTop = backgroundImage.top || 0;
+        
+        // Calculate scaling factors to map from canvas coordinates to original image dimensions
+        const scaleX = originalDimensions.width / (imgWidth * imgScaleX);
+        const scaleY = originalDimensions.height / (imgHeight * imgScaleY);
+        
+        // Filter out the background image, only keep path objects for the mask
+        const pathObjects = objects.filter(obj => obj.type === 'path');
+        
+        // If no drawings, alert the user and exit
+        if (pathObjects.length === 0) {
+          setLoadingStatus("No mask drawn yet!");
+          setTimeout(() => {
+            if (loadingStatus && loadingStatus.includes("No mask")) {
+              setLoadingStatus("");
+            }
+          }, 1500);
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          
+          // Restore canvas zoom and transform
+          canvas.setZoom(currentZoom);
+          canvas.setViewportTransform(originalVpt);
+          
+          reject(new Error("No mask drawn yet"));
+          return;
+        }
+        
+        // Process each path object
+        for (let i = 0; i < pathObjects.length; i++) {
+          const obj = pathObjects[i];
+          const path = obj.path;
+          
+          if (path) {
+            // Start a new path on the export canvas
+            exportCtx.beginPath();
+            
+            // Adjust the starting point
+            // For path coordinates, we need to account for:
+            // 1. Background image position offset
+            // 2. Scaling from canvas coordinates to original image coordinates
+            const startPoint = path[0];
+            if (startPoint && startPoint.length >= 3) {
+              const adjustedX = (startPoint[1] - imgLeft) * scaleX;
+              const adjustedY = (startPoint[2] - imgTop) * scaleY;
+              exportCtx.moveTo(adjustedX, adjustedY);
+              
+              // Draw the path according to its type
+              for (let j = 1; j < path.length; j++) {
+                const p = path[j];
+                
+                if (p[0] === 'L') {
+                  // Line to
+                  const lineX = (p[1] - imgLeft) * scaleX;
+                  const lineY = (p[2] - imgTop) * scaleY;
+                  exportCtx.lineTo(lineX, lineY);
+                } else if (p[0] === 'Q') {
+                  // Quadratic curve
+                  const cpX = (p[1] - imgLeft) * scaleX;
+                  const cpY = (p[2] - imgTop) * scaleY;
+                  const endX = (p[3] - imgLeft) * scaleX;
+                  const endY = (p[4] - imgTop) * scaleY;
+                  exportCtx.quadraticCurveTo(cpX, cpY, endX, endY);
+                } else if (p[0] === 'C') {
+                  // Bezier curve
+                  const cp1X = (p[1] - imgLeft) * scaleX;
+                  const cp1Y = (p[2] - imgTop) * scaleY;
+                  const cp2X = (p[3] - imgLeft) * scaleX;
+                  const cp2Y = (p[4] - imgTop) * scaleY;
+                  const endX = (p[5] - imgLeft) * scaleX;
+                  const endY = (p[6] - imgTop) * scaleY;
+                  exportCtx.bezierCurveTo(cp1X, cp1Y, cp2X, cp2Y, endX, endY);
+                }
+              }
+            }
+            
+            // Set line properties and apply stroke
+            // Convert the brush size to the original image scale
+            exportCtx.lineWidth = (obj.strokeWidth || 1) * scaleX;
+            exportCtx.lineCap = 'round';
+            exportCtx.lineJoin = 'round';
+            exportCtx.stroke(); // Actually draw the white path
+          }
+        }
+        
+        // Restore canvas zoom and transform
+        canvas.setZoom(currentZoom);
+        canvas.setViewportTransform(originalVpt);
+        
+        // Convert canvas to data URL and log for debugging
+        const maskDataUrl = exportCanvas.toDataURL('image/png');
+        
+        // For debugging purposes
+        console.log('Generated mask with dimensions:', exportCanvas.width, 'x', exportCanvas.height);
+        
+        // Convert data URL to blob
+        const maskBlob = await fetch(maskDataUrl).then(r => r.blob());
+        
+        // Prepare form data for API request
+        const formData = new FormData();
+        
+        // Use the current inpainted image if available, otherwise use the original image
+        if (currentImageBlobRef.current) {
+          formData.append('image', currentImageBlobRef.current, 'current_image.png');
+        } else if (originalImageFileRef.current) {
+          formData.append('image', originalImageFileRef.current);
+        } else {
+          setLoadingStatus("No image available for inpainting");
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          reject(new Error("No image available for inpainting"));
+          return;
+        }
+        
+        formData.append('mask', maskBlob, 'mask.png');
+        
+        // Send to inpainting API
+        try {
+          setLoadingStatus("Sending to API...");
+          
+          const response = await fetch(`${API_URL}/inpaint`, {
+            method: 'POST',
+            body: formData,
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
+          }
+          
+          const data = await response.json();
+          
+          if (!data.success) {
+            throw new Error(data.message || "API returned failure");
+          }
+          
+          setLoadingStatus("Processing response...");
+          
+          // Convert the base64 image data to a URL
+          const inpaintedImageUrl = `data:image/${data.format || 'png'};base64,${data.image}`;
+          
+          // Convert to blob for future use
+          const inpaintedImageBlob = await fetch(inpaintedImageUrl).then(r => r.blob());
+          currentImageBlobRef.current = inpaintedImageBlob;
+          
+          // Create a new image element to load the inpainted image
+          const img = new Image();
+          img.src = inpaintedImageUrl;
+          
+          img.onload = () => {
+            if (!fabricCanvasRef.current) {
+              setLoadingStatus("Canvas not available");
+              setIsInpainting(false);
+              isInpaintingRef.current = false;
+              reject(new Error("Canvas not available"));
+              return;
+            }
+            
+            const canvas = fabricCanvasRef.current;
+            
+            // Store the new dimensions
+            originalImageDimensionsRef.current = {
+              width: img.width,
+              height: img.height
+            };
+            
+            // Clear the canvas
+            canvas.clear();
+            
+            // Create a Fabric image from the inpainted image
+            const fabricImg = new FabricImage(img);
+            
+            // Get the canvas dimensions
+            const canvasWidth = canvas.getWidth();
+            const canvasHeight = canvas.getHeight();
+            
+            // Calculate scaling to fit the image in the canvas
+            const scaleX = canvasWidth / img.width;
+            const scaleY = canvasHeight / img.height;
+            const scale = Math.min(scaleX, scaleY);
+            
+            fabricImg.scale(scale);
+            
+            // Center the image on the canvas
+            canvas.centerObject(fabricImg);
+            fabricImg.selectable = false;
+            fabricImg.evented = false;
+            
+            // Add the image to the canvas
+            canvas.add(fabricImg);
+            canvas.renderAll();
+            
+            // Clear the history stack
+            historyStackRef.current = [];
+            
+            // Reset inpainting state
+            setIsInpainting(false);
+            isInpaintingRef.current = false;
+            setLoadingStatus("Inpainting complete");
+            
+            // Clean up the URL
+            URL.revokeObjectURL(inpaintedImageUrl);
+            
+            resolve();
+          };
+          
+          img.onerror = (err) => {
+            console.error("Error loading inpainted image:", err);
+            setLoadingStatus("Failed to load inpainted image");
+            setIsInpainting(false);
+            isInpaintingRef.current = false;
+            reject(new Error("Failed to load inpainted image"));
+          };
+        } catch (error: any) {
+          setLoadingStatus(`Inpainting failed: ${error.message || 'Unknown error'}`);
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+          reject(error);
+        }
+      } catch (error: any) {
+        setLoadingStatus(`Inpainting failed: ${error.message || 'Unknown error'}`);
+        setIsInpainting(false);
+        isInpaintingRef.current = false;
+        reject(error);
+      }
+    });
+  };
+  
+  // Function to update brush cursor with dotted circle
+  const updateBrushCursor = (size: number) => {
+    if (!containerRef.current) return;
+    
+    // Get the current zoom level
+    const zoom = zoomRef.current;
+    
+    // Adjust cursor size based on zoom level
+    const zoomedSize = size * zoom;
+    
+    // Create an SVG circle cursor with a dotted stroke
+    const circle = `
+      <svg
+        height="${zoomedSize}"
+        width="${zoomedSize}"
+        viewBox="0 0 ${zoomedSize} ${zoomedSize}"
+        xmlns="http://www.w3.org/2000/svg"
+        style="background-color: transparent;"
+      >
+        <circle
+          cx="${zoomedSize / 2}"
+          cy="${zoomedSize / 2}"
+          r="${(zoomedSize / 2) - 1}"
+          stroke="rgba(236, 72, 153, 0.8)"
+          stroke-width="1"
+          fill="none"
+        />
+      </svg>
+    `;
+    
+    // Convert the SVG to a data URL
+    const svgBlob = new Blob([circle], {type: 'image/svg+xml'});
+    const url = URL.createObjectURL(svgBlob);
+    
+    // Apply the cursor to the container
+    containerRef.current.style.cursor = `url('${url}') ${zoomedSize / 2} ${zoomedSize / 2}, auto`;
+    
+    // Clean up the URL after a longer delay to ensure it's fully loaded
+    setTimeout(() => URL.revokeObjectURL(url), 300);
+  };
+  
+  // Function to update the brush size
+  const updateBrushSize = (newSize: number) => {
+    if (!fabricCanvasRef.current) return;
+    
+    // Clamp size between 5 and 50
+    const clampedSize = Math.max(5, Math.min(newSize, 50));
+    brushSizeRef.current = clampedSize;
+    
+    // Update the brush size in Fabric
+    const canvas = fabricCanvasRef.current;
+    const brush = canvas.freeDrawingBrush;
+    brush.width = clampedSize;
+    
+    // Update cursor
+    updateBrushCursor(clampedSize);
+    
+    // Show feedback
+    setLoadingStatus(`Brush: ${clampedSize}px`);
+    setTimeout(() => {
+      if (loadingStatus.includes("Brush")) {
+        setLoadingStatus("");
+      }
+    }, 1000);
+  };
+  
+  // Zoom canvas functionality
+  const zoomCanvas = (delta: number, x: number, y: number) => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Get pointer position relative to canvas
+    const pointer = canvas.getPointer({ clientX: x, clientY: y });
+    
+    // More granular zoom increments for smoother zooming
+    const zoomFactor = delta > 0 ? 0.95 : 1.05;
+    
+    // Calculate new zoom level
+    let newZoom = zoomRef.current * zoomFactor;
+    
+    // Clamp zoom level between 0.5 and 4
+    newZoom = Math.max(0.5, Math.min(newZoom, 4));
+    
+    // Don't do anything if we're already at the limit
+    if (newZoom === zoomRef.current) return;
+    
+    // Apply zoom with Fabric's zoomToPoint
+    canvas.zoomToPoint({ x: pointer.x, y: pointer.y }, newZoom);
+    
+    // Update zoom reference
+    zoomRef.current = newZoom;
+    
+    // Display feedback
+    setLoadingStatus(`Zoom: ${Math.round(newZoom * 100)}%`);
+    setTimeout(() => {
+      if (loadingStatus && loadingStatus.includes("Zoom")) {
+        setLoadingStatus("");
+      }
+    }, 1000);
+    
+    // Update cursor for the brush if in mask mode
+    if (tool === 'mask') {
+      updateBrushCursor(brushSizeRef.current);
+    }
+  };
+  
+  // Reset zoom to 1
+  const resetZoom = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Reset zoom to 1 (100%)
+    canvas.setZoom(1);
+    
+    // Reset pan to center
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    
+    // Update zoom reference
+    zoomRef.current = 1;
+    
+    // Reset any accumulated pan values
+    panPositionRef.current = { x: 0, y: 0 };
+    
+    // Show feedback
+    setLoadingStatus("Zoom reset to 100%");
+    setTimeout(() => {
+      if (loadingStatus && loadingStatus.includes("Zoom")) {
+        setLoadingStatus("");
+      }
+    }, 1000);
+    
+    // Update cursor for the brush if in mask mode
+    if (tool === 'mask') {
+      updateBrushCursor(brushSizeRef.current);
+    }
+  };
+  
+  // Initialize the canvas when component mounts
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    
+    // If a Fabric canvas instance already exists, dispose it
+    if (fabricCanvasRef.current) {
+      fabricCanvasRef.current.dispose();
+      fabricCanvasRef.current = null;
+    }
+    
+    // Get container dimensions for initial setup
+    const containerWidth = containerRef.current?.clientWidth || window.innerWidth * 0.9;
+    const containerHeight = containerRef.current?.clientHeight || window.innerHeight * 0.8;
+    
+    setLoadingStatus("Initializing canvas...");
+    
+    // Create a new Fabric canvas
+    const fabricCanvas = new Canvas(canvasRef.current, {
+      isDrawingMode: tool === 'mask',
+      backgroundColor: '#f5f5f5',
+      width: containerWidth,
+      height: containerHeight,
+      selection: false, // Disable selection to prevent accidental selection
+      preserveObjectStacking: true, // Maintain stacking order
+      fireRightClick: false, // Don't fire right click
+      stopContextMenu: true // Prevent context menu
+    });
+    
+    fabricCanvasRef.current = fabricCanvas;
+    
+    // Configure brush
+    const pencilBrush = new PencilBrush(fabricCanvas);
+    pencilBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
+    pencilBrush.width = brushSizeRef.current;
+    fabricCanvas.freeDrawingBrush = pencilBrush;
+    
+    // Initialize cursor if in mask mode
+    if (tool === 'mask') {
+      updateBrushCursor(brushSizeRef.current);
+    }
+    
+    // Handle path created event for undo history
+    fabricCanvas.on('path:created', (e: any) => {
+      // Only add to history if not currently inpainting
+      if (!isInpaintingRef.current) {
+        const path = e.path;
+        historyStackRef.current.push(path);
+      }
+    });
+    
+    // Set loading status to indicate canvas is ready
+    setLoadingStatus("Canvas initialized");
+    setTimeout(() => setLoadingStatus(""), 1500);
+    
+  }, [tool]); // Run when tool changes
+  
+  // Handle image changes in a separate effect
+  useEffect(() => {
+    if (!fabricCanvasRef.current || !image) return;
+    
+    setLoadingStatus("Loading image...");
+    
+    // Load the image into the canvas
+    const imageUrl = URL.createObjectURL(image);
+    
+    const htmlImg = new Image();
+    htmlImg.src = imageUrl;
+    
+    htmlImg.onload = () => {
+      if (!fabricCanvasRef.current || !containerRef.current) {
+        setLoadingStatus("Canvas not available");
+        URL.revokeObjectURL(imageUrl);
+        return;
+      }
+      
+      const canvas = fabricCanvasRef.current;
+      
+      // Store original dimensions
+      originalImageDimensionsRef.current = {
+        width: htmlImg.width,
+        height: htmlImg.height,
+      };
+      
+      // Store the original image URL
+      originalImageDataRef.current = imageUrl;
+      
+      // Clear the canvas of any existing content
+      canvas.clear();
+      
+      // Create a fabric image
+      const fabricImg = new FabricImage(htmlImg);
+      
+      // Calculate container dimensions
+      const containerWidth = containerRef.current.clientWidth;
+      const containerHeight = containerRef.current.clientHeight;
+      
+      // Set canvas dimensions
+      canvas.setWidth(containerWidth);
+      canvas.setHeight(containerHeight);
+      
+      // Calculate scaling to fit the image in the canvas
+      const scaleX = containerWidth / htmlImg.width;
+      const scaleY = containerHeight / htmlImg.height;
+      const scale = Math.min(scaleX, scaleY) * 0.95; // Use 95% to leave some margin
+      
+      // Get image dimensions
+      const imgWidth = htmlImg.width;
+      const imgHeight = htmlImg.height;
+      
+      setLoadingStatus(`Image: ${imgWidth}x${imgHeight}`);
+      
+      // Calculate the scaled dimensions
+      const scaledWidth = Math.round(imgWidth * scale);
+      const scaledHeight = Math.round(imgHeight * scale);
+      
+      setLoadingStatus(`Scaled dimensions: ${scaledWidth}x${scaledHeight}`);
+      
+      fabricImg.scale(scale);
+      
+      // Center the image on the canvas
+      canvas.add(fabricImg);
+      canvas.centerObject(fabricImg);
+      
+      // Make the image non-interactive
+      fabricImg.selectable = false;
+      fabricImg.evented = false;
+      
+      // Clear the history stack when adding a new image
+      historyStackRef.current = [];
+      
+      // Reset zoom level
+      zoomRef.current = 1;
+      canvas.setZoom(1);
+      canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
+      
+      // Re-initialize drawing mode if in mask mode
+      if (tool === 'mask') {
+        canvas.isDrawingMode = true;
+        if (canvas.freeDrawingBrush) {
+          canvas.freeDrawingBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
+          canvas.freeDrawingBrush.width = brushSizeRef.current;
+          
+          // Update cursor
+          updateBrushCursor(brushSizeRef.current);
+        }
+      }
+      
+      canvas.renderAll();
+      
+      setLoadingStatus("Image loaded successfully");
+      setTimeout(() => setLoadingStatus(""), 1500);
+    };
+    
+    htmlImg.onerror = () => {
+      setLoadingStatus("Failed to load image");
+      URL.revokeObjectURL(imageUrl);
+    };
+    
+    // Cleanup function
+    return () => {
+      URL.revokeObjectURL(imageUrl);
+    };
+  }, [image]);
+  
+  // Add event listeners for mouse and keyboard events
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      // Prevent default behavior first to avoid page scrolling
+      e.preventDefault();
+      
+      // Check if Ctrl key is pressed for zooming
+      if (e.ctrlKey || e.metaKey) {
+        // Use zoom function with mouse position
+        zoomCanvas(e.deltaY, e.clientX, e.clientY);
+      } 
+      // Otherwise adjust brush size if in mask mode
+      else if (tool === 'mask') {
+        // Adjust brush size based on wheel direction
+        const delta = e.deltaY > 0 ? -2 : 2;
+        updateBrushSize(brushSizeRef.current + delta);
+      }
+    };
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      // Handle Ctrl key press for cursor change
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setLoadingStatus('Ready to zoom (Ctrl+Scroll)');
+        if (containerRef.current && containerRef.current.style.cursor !== 'zoom-in') {
+          containerRef.current.style.cursor = 'zoom-in';
+        }
+      }
+      
+      // Handle Ctrl+0 to reset zoom
+      if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.key === 'NumPad0')) {
+        e.preventDefault();
+        resetZoom();
+      }
+      
+      // Space key for panning
+      if (e.code === 'Space') {
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grab';
+        }
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setLoadingStatus('');
+        if (!containerRef.current) return;
+        
+        if (tool === 'mask') {
+          updateBrushCursor(brushSizeRef.current);
+        } else {
+          containerRef.current.style.cursor = 'default';
+        }
+      }
+      
+      if (e.code === 'Space') {
+        if (containerRef.current) {
+          if (tool === 'mask') {
+            updateBrushCursor(brushSizeRef.current);
+          } else {
+            containerRef.current.style.cursor = 'default';
+          }
+        }
+        isPanningRef.current = false;
+      }
+    };
+    
+    // Add resize listener
+    const handleResize = () => {
+      if (!containerRef.current || !fabricCanvasRef.current) return;
+      
+      const canvas = fabricCanvasRef.current;
+      
+      // Get new container dimensions
+      const containerWidth = containerRef.current.clientWidth;
+      const containerHeight = containerRef.current.clientHeight;
+      
+      // Update canvas dimensions
+      canvas.setWidth(containerWidth);
+      canvas.setHeight(containerHeight);
+      
+      // Recalculate scaling for all objects
+      const objects = canvas.getObjects();
+      if (objects.length > 0 && objects[0] instanceof FabricImage) {
+        const img = objects[0] as FabricImage;
+        
+        // Calculate scaling to fit the image in the canvas
+        const scaleX = containerWidth / (img.width || 1);
+        const scaleY = containerHeight / (img.height || 1);
+        const scale = Math.min(scaleX, scaleY) * 0.95;
+        
+        img.scale(scale);
+        
+        // Center the image on the canvas
+        canvas.centerObject(img);
+      }
+      
+      canvas.renderAll();
+    };
+    
+    // Mouse event handlers for panning
+    const handleMouseDown = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      // Only allow panning with space bar held or middle mouse button
+      if (e.button === 1 || (e.button === 0 && e.getModifierState('Space'))) {
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grabbing';
+        }
+        isPanningRef.current = true;
+        e.preventDefault();
+        
+        // Store initial pointer position
+        if (fabricCanvasRef.current) {
+          const canvas = fabricCanvasRef.current;
+          const pointer = canvas.getPointer(e);
+          panPositionRef.current = { x: pointer.x, y: pointer.y };
+        }
+      }
+    };
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      const canvas = fabricCanvasRef.current;
+      if (!canvas || !isPanningRef.current) return;
+      
+      // Pan the canvas based on mouse movement
+      const delta = {
+        x: e.movementX,
+        y: e.movementY
+      };
+      
+      // Get current viewport transform
+      const vpt = [...(canvas.viewportTransform || [1, 0, 0, 1, 0, 0])];
+      
+      // Update the transform with the movement delta
+      vpt[4] += delta.x;
+      vpt[5] += delta.y;
+      
+      // Update the canvas transform
+      canvas.setViewportTransform(vpt);
+      
+      // Store the pan position for reference
+      panPositionRef.current = {
+        x: vpt[4],
+        y: vpt[5]
+      };
+      
+      e.preventDefault();
+    };
+    
+    const handleMouseUp = (e: MouseEvent) => {
+      // Skip if inpainting is in progress
+      if (isInpainting) return;
+      
+      isPanningRef.current = false;
+      
+      if (containerRef.current) {
+        // Restore appropriate cursor
+        if (e.getModifierState('Control') || e.getModifierState('Meta')) {
+          containerRef.current.style.cursor = 'zoom-in';
+        } else if (tool === 'mask') {
+          updateBrushCursor(brushSizeRef.current);
+        } else {
+          containerRef.current.style.cursor = 'default';
+        }
+      }
+    };
+    
+    const container = containerRef.current;
+    if (container) {
+      // Use passive: false to prevent browser warnings with preventDefault
+      container.addEventListener('wheel', handleWheel, { passive: false });
+      container.addEventListener('mousedown', handleMouseDown);
+      container.addEventListener('mousemove', handleMouseMove);
+      container.addEventListener('mouseup', handleMouseUp);
+      container.addEventListener('mouseleave', handleMouseUp);
+      
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
+    }
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Return cleanup function
+    return () => {
+      if (container) {
+        container.removeEventListener('wheel', handleWheel);
+        container.removeEventListener('mousedown', handleMouseDown);
+        container.removeEventListener('mousemove', handleMouseMove);
+        container.removeEventListener('mouseup', handleMouseUp);
+        container.removeEventListener('mouseleave', handleMouseUp);
+      }
+      
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [tool, isInpainting]);
+  
+  // Add an effect to force cursor inheritance in canvas elements
+  useEffect(() => {
+    // Create a style element
+    const styleElement = document.createElement('style');
+    styleElement.innerHTML = `
+      canvas {
+        cursor: inherit !important;
+      }
+    `;
+    document.head.appendChild(styleElement);
+    
+    return () => {
+      document.head.removeChild(styleElement);
+    };
+  }, []);
+  
+  // Update drawing mode when tool changes
+  useEffect(() => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Only enable drawing mode if not currently inpainting
+    canvas.isDrawingMode = tool === 'mask' && !isInpainting;
+    
+    // Make sure we update the brush when tool changes
+    if (tool === 'mask' && canvas.freeDrawingBrush && !isInpainting) {
+      canvas.freeDrawingBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
+      canvas.freeDrawingBrush.width = brushSizeRef.current;
+      
+      // Update cursor
+      updateBrushCursor(brushSizeRef.current);
+    } else {
+      // Reset cursor
+      if (containerRef.current) {
+        containerRef.current.style.cursor = isInpainting ? 'wait' : 'default';
+      }
+    }
+  }, [tool, isInpainting]);
+  
+  // Render the component
+  return (
+    <div 
+      ref={containerRef} 
+      style={{ 
+        width: '100%', 
+        height: '100%',
+        display: 'flex', 
+        flexDirection: 'column',
+        justifyContent: 'center', 
+        alignItems: 'center',
+        backgroundColor: '#f5f5f5',
+        overflow: 'hidden',
+        position: 'relative',
+        cursor: isInpainting ? 'wait' : undefined
+      }}
+    >
+      <canvas ref={canvasRef} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+      
+      {/* Loading status overlay */}
+      {loadingStatus && (
+        <div style={{
+          position: 'absolute',
+          bottom: '10px',
+          left: '10px',
+          padding: '5px 10px',
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          color: '#fff',
+          borderRadius: '4px',
+          fontSize: '12px',
+          pointerEvents: 'none'
+        }}>
+          Status: {loadingStatus}
+        </div>
+      )}
+      
+      {/* Zoom info overlay */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        padding: '5px 10px',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        color: '#fff',
+        borderRadius: '4px',
+        fontSize: '12px',
+        pointerEvents: 'none'
+      }}>
+        Scroll: Brush Size • Ctrl+Scroll: Zoom • Ctrl+0: Reset • Middle Mouse: Pan
+      </div>
+      
+      {/* Inpainting overlay */}
+      {isInpainting && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          zIndex: 100,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          pointerEvents: 'all'
+        }}>
+          <div style={{
+            padding: '10px 20px',
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            color: '#fff',
+            borderRadius: '4px',
+            fontSize: '14px'
+          }}>
+            Processing... Please wait
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+export default CanvasEditor; 
