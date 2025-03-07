@@ -2,11 +2,16 @@ import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 're
 import { Canvas, Image as FabricImage, PencilBrush, Rect } from 'fabric';
 import { Translation } from './TranslationPanel';
 
+// Need to import fabric globally for access to Text objects
+// @ts-ignore
+import 'fabric';
+
 interface CanvasEditorProps {
   image: File | null;
   tool: string;
   onSelectionsChange?: (hasSelections: boolean) => void;
   onSelectionHover?: (id: string | null) => void;
+  onTextSelection?: (isTextSelected: boolean) => void;
 }
 
 // Create a type for the functions that will be exposed via the ref
@@ -17,6 +22,8 @@ export interface CanvasEditorRef {
   clearSelections: () => void;
   highlightSelection: (id: string | null) => void;
   addTextToCanvas: (translation: Translation) => void;
+  updateSelectedTextStyle: (style: { fontFamily?: string, fontSize?: number, color?: string }) => void;
+  isTextSelected: () => boolean;
 }
 
 // Add API URL configuration
@@ -40,7 +47,7 @@ type HistoryAction = {
   data: any;
 };
 
-const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onSelectionHover }, ref) => {
+const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onSelectionHover, onTextSelection }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -77,6 +84,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   // Ref for starting point of rectangle
   const startPointRef = useRef<{ x: number, y: number } | null>(null);
   
+  // Add ref for tracking the currently selected text element
+  const selectedTextRef = useRef<HTMLElement | null>(null);
+  
   // Expose functions to the parent component via ref
   useImperativeHandle(ref, () => ({
     exportMask: () => {
@@ -101,17 +111,17 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       const backgroundImage = objects.find(obj => obj instanceof FabricImage);
       
       if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
-        console.error("Background image not found for coordinate transformation");
         return selectionsRef.current.map(selection => ({
           id: selection.id,
           ...selection.bounds
         }));
       }
       
-      // Get the original image dimensions
-      const originalDimensions = originalImageDimensionsRef.current;
+      // Original image dimensions
+      const originalWidth = originalImageDimensionsRef.current.width;
+      const originalHeight = originalImageDimensionsRef.current.height;
       
-      // Get the background image scaling and position
+      // Image scaling
       const imgWidth = backgroundImage.width || 1;
       const imgHeight = backgroundImage.height || 1;
       const imgScaleX = (backgroundImage as any).scaleX || 1;
@@ -119,27 +129,24 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       const imgLeft = backgroundImage.left || 0;
       const imgTop = backgroundImage.top || 0;
       
-      // Calculate scaling factors to map from canvas coordinates to original image dimensions
-      const scaleX = originalDimensions.width / (imgWidth * imgScaleX);
-      const scaleY = originalDimensions.height / (imgHeight * imgScaleY);
+      // Calculate scaling factors
+      const scaleX = (imgWidth * imgScaleX) / originalWidth;
+      const scaleY = (imgHeight * imgScaleY) / originalHeight;
       
-      // Transform each selection's coordinates
+      // Map selections to their original image coordinates
       return selectionsRef.current.map(selection => {
-        // Adjust coordinates relative to the image's position on canvas
-        const relativeLeft = selection.bounds.left - imgLeft;
-        const relativeTop = selection.bounds.top - imgTop;
+        const { left, top, width, height } = selection.bounds;
         
-        // Scale to original image coordinates
-        const originalLeft = Math.round(relativeLeft * scaleX);
-        const originalTop = Math.round(relativeTop * scaleY);
-        const originalWidth = Math.round(selection.bounds.width * scaleX);
-        const originalHeight = Math.round(selection.bounds.height * scaleY);
+        // Transform from canvas to image coordinates
+        const originalLeft = (left - imgLeft) / scaleX;
+        const originalTop = (top - imgTop) / scaleY;
+        const originalWidth = width / scaleX;
+        const originalHeight = height / scaleY;
         
-        // Ensure coordinates are not negative
         return {
           id: selection.id,
-          left: Math.max(0, originalLeft),
-          top: Math.max(0, originalTop),
+          left: originalLeft,
+          top: originalTop,
           width: originalWidth,
           height: originalHeight
         };
@@ -153,70 +160,415 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     },
     addTextToCanvas: (translation: Translation) => {
       addTranslatedTextToCanvas(translation);
+    },
+    updateSelectedTextStyle: (style: { fontFamily?: string, fontSize?: number, color?: string }) => {
+      // Use the selectedTextRef instead of searching for active element
+      const selectedElement = selectedTextRef.current;
+      
+      if (!selectedElement) return;
+      
+      // Apply styles to the selected element
+      if (style.fontFamily) {
+        selectedElement.style.fontFamily = style.fontFamily;
+      }
+      
+      if (style.fontSize) {
+        selectedElement.style.fontSize = `${style.fontSize}px`;
+      }
+      
+      if (style.color) {
+        selectedElement.style.color = style.color;
+      }
+    },
+    isTextSelected: () => {
+      return selectedTextRef.current !== null;
     }
   }));
   
   // Function to add translated text to the canvas
-  const addTranslatedTextToCanvas = (translation: Translation) => {
+  const addTranslatedTextToCanvas = async (translation: Translation) => {
     if (!fabricCanvasRef.current || !originalImageDimensionsRef.current) return;
     
     const canvas = fabricCanvasRef.current;
     
-    // Get the background image (first object) to calculate the transformation
-    const objects = canvas.getObjects();
-    const backgroundImage = objects.find(obj => obj instanceof FabricImage);
-    
-    if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
-      console.error("Background image not found for coordinate transformation");
-      return;
+    try {
+      // Show loading status
+      setLoadingStatus(translation.useInpainting ? "Inpainting text area..." : "Adding text to image...");
+      
+      // Get the background image (first object) to calculate the transformation
+      const objects = canvas.getObjects();
+      const backgroundImage = objects.find(obj => obj instanceof FabricImage);
+      
+      if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
+        console.error("Background image not found for coordinate transformation");
+        setLoadingStatus("Error: Background image not found");
+        setTimeout(() => setLoadingStatus(""), 1500);
+        return;
+      }
+      
+      // Get the original image dimensions
+      const originalDimensions = originalImageDimensionsRef.current;
+      
+      // Get the background image scaling and position
+      const imgWidth = backgroundImage.width || 1;
+      const imgHeight = backgroundImage.height || 1;
+      const imgScaleX = (backgroundImage as any).scaleX || 1;
+      const imgScaleY = (backgroundImage as any).scaleY || 1;
+      const imgLeft = backgroundImage.left || 0;
+      const imgTop = backgroundImage.top || 0;
+      
+      // Calculate scaling factors to map from original image coordinates to canvas coordinates
+      const scaleX = (imgWidth * imgScaleX) / originalDimensions.width;
+      const scaleY = (imgHeight * imgScaleY) / originalDimensions.height;
+      
+      // Transform coordinates from original image to canvas
+      const canvasLeft = translation.bounds.left * scaleX + imgLeft;
+      const canvasTop = translation.bounds.top * scaleY + imgTop;
+      const canvasWidth = translation.bounds.width * scaleX;
+      const canvasHeight = translation.bounds.height * scaleY;
+      
+      // Use inpainting if requested
+      if (translation.useInpainting) {
+        // Set inpainting state
+        setIsInpainting(true);
+        isInpaintingRef.current = true;
+        
+        try {
+          // Create a mask for the inpainting (a black image with white rectangle where text should be removed)
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = originalDimensions.width;
+          maskCanvas.height = originalDimensions.height;
+          const maskCtx = maskCanvas.getContext('2d');
+          
+          if (!maskCtx) {
+            throw new Error("Failed to create mask context");
+          }
+          
+          // Fill the canvas with black (areas to keep)
+          maskCtx.fillStyle = '#000000';
+          maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+          
+          // Draw a white rectangle where we want to inpaint (areas to remove)
+          maskCtx.fillStyle = '#ffffff';
+          maskCtx.fillRect(
+            translation.bounds.left,
+            translation.bounds.top,
+            translation.bounds.width,
+            translation.bounds.height
+          );
+          
+          // Get blobs for API call
+          const maskBlob = await new Promise<Blob | null>((resolve) => {
+            maskCanvas.toBlob((blob) => resolve(blob), 'image/png');
+          });
+          
+          // Get the current image blob
+          let imageBlob: Blob | null = null;
+          
+          if (currentImageBlobRef.current) {
+            // Use the current image if available
+            imageBlob = currentImageBlobRef.current;
+          } else if (originalImageFileRef.current) {
+            // Use the original file
+            const reader = new FileReader();
+            imageBlob = await new Promise<Blob | null>((resolveBlob) => {
+              reader.onload = async (event) => {
+                if (event.target?.result) {
+                  try {
+                    const blob = await fetch(event.target.result as string).then(r => r.blob());
+                    resolveBlob(blob);
+                  } catch (e) {
+                    console.error("Error creating blob:", e);
+                    resolveBlob(null);
+                  }
+                } else {
+                  resolveBlob(null);
+                }
+              };
+              reader.onerror = () => resolveBlob(null);
+              reader.readAsDataURL(originalImageFileRef.current as File);
+            });
+          }
+          
+          if (!imageBlob || !maskBlob) {
+            throw new Error("Failed to create image or mask blob");
+          }
+          
+          // Save the current image for undo
+          if (imageBlob) {
+            const previousImageBlob = imageBlob.slice(0);
+            historyStackRef.current.push({
+              type: 'inpainting',
+              data: {
+                imageBlob: previousImageBlob,
+                dimensions: {...originalDimensions}
+              }
+            });
+          }
+          
+          // Create form data for the API request
+          const formData = new FormData();
+          formData.append('image', imageBlob, 'image.png');
+          formData.append('mask', maskBlob, 'mask.png');
+          
+          // Call the inpainting API
+          const response = await fetch(`${API_URL}/inpaint`, {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Inpainting failed with status ${response.status}`);
+          }
+          
+          const data = await response.json();
+          
+          if (!data.success) {
+            throw new Error(data.message || "Inpainting API returned failure");
+          }
+          
+          // Load the inpainted image
+          const inpaintedImageUrl = `data:image/${data.format || 'png'};base64,${data.image}`;
+          const inpaintedImg = new Image();
+          
+          await new Promise<void>((resolve, reject) => {
+            inpaintedImg.onload = () => resolve();
+            inpaintedImg.onerror = (e) => reject(e);
+            inpaintedImg.src = inpaintedImageUrl;
+          });
+          
+          // Store the new dimensions
+          originalImageDimensionsRef.current = {
+            width: inpaintedImg.width,
+            height: inpaintedImg.height
+          };
+          
+          // Convert to blob for future use
+          const inpaintedBlob = await fetch(inpaintedImageUrl).then(r => r.blob());
+          currentImageBlobRef.current = inpaintedBlob;
+          
+          // Clear the canvas
+          canvas.clear();
+          
+          // Add the new image to the canvas
+          const fabricImg = new FabricImage(inpaintedImg);
+          
+          // Calculate scaling to fit in canvas
+          const canvasContainerWidth = canvas.getWidth();
+          const canvasContainerHeight = canvas.getHeight();
+          const scaleFactor = Math.min(
+            canvasContainerWidth / inpaintedImg.width,
+            canvasContainerHeight / inpaintedImg.height
+          ) * 0.95; // 95% to leave some margin
+          
+          fabricImg.scale(scaleFactor);
+          
+          // Center the image
+          canvas.centerObject(fabricImg);
+          fabricImg.selectable = false;
+          fabricImg.evented = false;
+          
+          // Add to canvas
+          canvas.add(fabricImg);
+          canvas.renderAll();
+          
+          // Clean up
+          URL.revokeObjectURL(inpaintedImageUrl);
+        } catch (error) {
+          console.error("Inpainting failed:", error);
+          setLoadingStatus("Inpainting failed. Using white rectangle instead.");
+          
+          // Fall back to the white rectangle method
+          const whiteRect = new Rect({
+            left: canvasLeft,
+            top: canvasTop,
+            width: canvasWidth,
+            height: canvasHeight,
+            fill: 'white',
+            selectable: false,
+            evented: false,
+          });
+          
+          // Add to canvas
+          canvas.add(whiteRect);
+          
+          // Add to history
+          historyStackRef.current.push({
+            type: 'selection',
+            data: whiteRect
+          });
+        } finally {
+          // Reset inpainting state
+          setIsInpainting(false);
+          isInpaintingRef.current = false;
+        }
+      } else {
+        // Default method: add a white rectangle to cover the original text
+        const whiteRect = new Rect({
+          left: canvasLeft,
+          top: canvasTop,
+          width: canvasWidth,
+          height: canvasHeight,
+          fill: 'white',
+          selectable: false,
+          evented: false,
+        });
+        
+        // Add the white rectangle
+        canvas.add(whiteRect);
+        
+        // Add to history stack for undo
+        historyStackRef.current.push({
+          type: 'selection',
+          data: whiteRect
+        });
+      }
+      
+      // Create a text object using a different approach to avoid fabric.js import issues
+      const textObject = new Rect({
+        left: canvasLeft,
+        top: canvasTop,
+        width: canvasWidth,
+        height: canvasHeight,
+        fill: 'rgba(0,0,0,0)', // Transparent fill 
+        stroke: 'rgba(0,0,0,0)', // No border
+        selectable: true,
+        evented: true
+      });
+      
+      // Add text as a separate DOM element over the canvas
+      const textElement = document.createElement('div');
+      textElement.style.position = 'absolute';
+      textElement.style.left = `${canvasLeft}px`;
+      textElement.style.top = `${canvasTop}px`;
+      textElement.style.width = `${canvasWidth}px`;
+      textElement.style.height = `${canvasHeight}px`;
+
+      // Apply default text styling
+      textElement.style.color = translation.textStyle?.color || 'black';
+      textElement.style.fontFamily = translation.textStyle?.fontFamily || 'Arial';
+      const fontSize = translation.textStyle?.fontSize || Math.min(20, canvasWidth / 10);
+      textElement.style.fontSize = `${fontSize}px`;
+
+      textElement.style.textAlign = 'center';
+      textElement.style.display = 'flex';
+      textElement.style.alignItems = 'center';
+      textElement.style.justifyContent = 'center';
+      textElement.style.pointerEvents = 'auto'; // Make sure it can receive events
+      textElement.style.cursor = 'move';
+      textElement.style.zIndex = '1000'; // Ensure it's above the canvas elements
+      textElement.innerText = translation.translated;
+      textElement.contentEditable = 'true';
+      textElement.dataset.textId = `text-${Date.now()}`;
+      
+      // Add highlight/selection styling
+      textElement.style.outline = 'none'; // Remove default focus outline
+      textElement.style.transition = 'box-shadow 0.2s';
+      
+      // Add click handler to track selected text
+      textElement.addEventListener('mousedown', (e) => {
+        // Set this element as the selected text
+        const allTextElements = containerRef.current?.querySelectorAll('[data-text-id]');
+        
+        // Remove selection styling from all text elements
+        if (allTextElements) {
+          allTextElements.forEach((el) => {
+            if (el instanceof HTMLElement) {
+              el.style.boxShadow = 'none';
+            }
+          });
+        }
+        
+        // Update selected text reference
+        selectedTextRef.current = textElement;
+        
+        // Add visual selection indicator
+        textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
+        
+        // Notify parent component of text selection
+        handleTextSelectionChange(true);
+        
+        // For dragging functionality
+        const initialX = e.clientX;
+        const initialY = e.clientY;
+        const startLeft = parseInt(textElement.style.left, 10) || 0;
+        const startTop = parseInt(textElement.style.top, 10) || 0;
+        
+        const onMouseMove = (moveEvent: MouseEvent) => {
+          const dx = moveEvent.clientX - initialX;
+          const dy = moveEvent.clientY - initialY;
+          textElement.style.left = `${startLeft + dx}px`;
+          textElement.style.top = `${startTop + dy}px`;
+          moveEvent.preventDefault();
+        };
+        
+        const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+        
+        // Only enable dragging when not editing text (e.g., when not double-clicked)
+        if (document.activeElement !== textElement) {
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+          e.preventDefault();
+        }
+      });
+      
+      // Add focus handler to ensure selected state is maintained when editing
+      textElement.addEventListener('focus', () => {
+        // Set this element as the selected text
+        selectedTextRef.current = textElement;
+        
+        // Remove selection styling from all text elements
+        const allTextElements = containerRef.current?.querySelectorAll('[data-text-id]');
+        if (allTextElements) {
+          allTextElements.forEach((el) => {
+            if (el instanceof HTMLElement) {
+              el.style.boxShadow = 'none';
+            }
+          });
+        }
+        
+        // Add visual selection indicator
+        textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
+        
+        // Notify parent component of text selection
+        handleTextSelectionChange(true);
+      });
+      
+      containerRef.current?.appendChild(textElement);
+      
+      // Set as selected text immediately
+      selectedTextRef.current = textElement;
+      textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
+      handleTextSelectionChange(true);
+      
+      // Add to canvas
+      canvas.add(textObject);
+      canvas.renderAll();
+      
+      // Add to history stack for undo
+      historyStackRef.current.push({
+        type: 'selection',
+        data: {
+          fabricObject: textObject,
+          domElement: textElement
+        }
+      });
+      
+      // Clear loading status
+      setLoadingStatus("Text added successfully");
+      setTimeout(() => setLoadingStatus(""), 1500);
+    } catch (error) {
+      console.error("Error adding text to canvas:", error);
+      setLoadingStatus("Error adding text to canvas");
+      setTimeout(() => setLoadingStatus(""), 1500);
+      
+      // Reset states
+      setIsInpainting(false);
+      isInpaintingRef.current = false;
     }
-    
-    // Get the original image dimensions
-    const originalDimensions = originalImageDimensionsRef.current;
-    
-    // Get the background image scaling and position
-    const imgWidth = backgroundImage.width || 1;
-    const imgHeight = backgroundImage.height || 1;
-    const imgScaleX = (backgroundImage as any).scaleX || 1;
-    const imgScaleY = (backgroundImage as any).scaleY || 1;
-    const imgLeft = backgroundImage.left || 0;
-    const imgTop = backgroundImage.top || 0;
-    
-    // Calculate scaling factors to map from original image coordinates to canvas coordinates
-    const scaleX = (imgWidth * imgScaleX) / originalDimensions.width;
-    const scaleY = (imgHeight * imgScaleY) / originalDimensions.height;
-    
-    // Transform coordinates from original image to canvas
-    const canvasLeft = translation.bounds.left * scaleX + imgLeft;
-    const canvasTop = translation.bounds.top * scaleY + imgTop;
-    const canvasWidth = translation.bounds.width * scaleX;
-    const canvasHeight = translation.bounds.height * scaleY;
-    
-    // Create a text object using fabric.js global namespace
-    // which is how the library is typically used
-    const textObject = new (window as any).fabric.Textbox(translation.translated, {
-      left: canvasLeft,
-      top: canvasTop,
-      width: canvasWidth,
-      fontSize: 20,
-      fill: '#000000',
-      fontFamily: 'Arial',
-      textAlign: 'center',
-      selectable: true,
-      editable: true
-    });
-    
-    // Add to canvas
-    canvas.add(textObject);
-    // Fabric.js object methods are accessed through the global fabric namespace
-    (canvas as any).setActiveObject(textObject);
-    canvas.renderAll();
-    
-    // Add to history stack for undo
-    historyStackRef.current.push({
-      type: 'selection',
-      data: textObject
-    });
   };
   
   // Function to highlight a selection by ID
@@ -448,14 +800,29 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       } else if (lastAction.type === 'selection') {
         // Handle text selection undo
         const objects = canvas.getObjects();
-        for (let i = 0; i < objects.length; i++) {
-          if (objects[i] === lastAction.data) {
-            // Remove found object from canvas
-            canvas.remove(objects[i]);
-            canvas.renderAll();
-            break;
+        const data = lastAction.data;
+
+        // If this is a text object with DOM element
+        if (data && typeof data === 'object' && 'fabricObject' in data && 'domElement' in data) {
+          // Remove the fabric object
+          canvas.remove(data.fabricObject);
+          
+          // Remove the DOM element if it exists
+          if (data.domElement && data.domElement.parentNode) {
+            data.domElement.parentNode.removeChild(data.domElement);
+          }
+        } else {
+          // Handle regular objects
+          for (let i = 0; i < objects.length; i++) {
+            if (objects[i] === lastAction.data) {
+              // Remove found object from canvas
+              canvas.remove(objects[i]);
+              break;
+            }
           }
         }
+
+        canvas.renderAll();
         
         setLoadingStatus("Undone text placement");
         setTimeout(() => {
@@ -567,6 +934,57 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       setTimeout(() => setLoadingStatus(""), 1500);
     }
   };
+  
+  // Function to handle text selection changes
+  const handleTextSelectionChange = (selected: boolean) => {
+    if (onTextSelection) {
+      onTextSelection(selected);
+    }
+  };
+  
+  // Update text element event listeners:
+  
+  // Modify the document click handler
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      // Check if click is outside text elements
+      if (containerRef.current && e.target instanceof Node) {
+        // Skip if clicking inside text element or on an element with the data-text-controls attribute
+        // This attribute will be added to the toolbar's text styling controls
+        let targetElement: Element | null = e.target instanceof Element ? e.target : null;
+        while (targetElement) {
+          if (targetElement.hasAttribute('data-text-id') || 
+              targetElement.hasAttribute('data-text-controls')) {
+            // Click is on a text element or text controls, don't deselect
+            return;
+          }
+          targetElement = targetElement.parentElement;
+        }
+        
+        // Clear selected text reference
+        selectedTextRef.current = null;
+        
+        // Remove selection styling from all text elements
+        const allTextElements = containerRef.current.querySelectorAll('[data-text-id]');
+        allTextElements.forEach((el) => {
+          if (el instanceof HTMLElement) {
+            el.style.boxShadow = 'none';
+          }
+        });
+        
+        // Notify parent component of text selection change
+        handleTextSelectionChange(false);
+      }
+    };
+    
+    // Add event listener when component mounts
+    document.addEventListener('mousedown', handleDocumentClick);
+    
+    // Clean up event listener when component unmounts
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+    };
+  }, [onTextSelection]);
   
   // Update the original image file reference when the image prop changes
   useEffect(() => {

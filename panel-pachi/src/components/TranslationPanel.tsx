@@ -10,6 +10,12 @@ export interface Translation {
     width: number;
     height: number;
   };
+  useInpainting?: boolean;
+  textStyle?: {
+    fontFamily?: string;
+    fontSize?: number;
+    color?: string;
+  };
 }
 
 interface TranslationPanelProps {
@@ -26,6 +32,7 @@ const TranslationPanel: FC<TranslationPanelProps> = ({
   onClose
 }) => {
   const [editingTranslation, setEditingTranslation] = useState<{ id: string, text: string } | null>(null);
+  const [inpaintingPreferences, setInpaintingPreferences] = useState<Record<string, boolean>>({});
 
   // Handle editing a translation
   const handleEditTranslation = (id: string, initialText: string) => {
@@ -42,12 +49,29 @@ const TranslationPanel: FC<TranslationPanelProps> = ({
       // Call onAddTextToCanvas with the updated translation
       onAddTextToCanvas({
         ...updatedTranslation,
-        translated: editingTranslation.text
+        translated: editingTranslation.text,
+        useInpainting: inpaintingPreferences[id] || false
       });
     }
     
     // Exit edit mode
     setEditingTranslation(null);
+  };
+
+  // Handle toggling inpainting preference
+  const handleInpaintingToggle = (id: string, checked: boolean) => {
+    setInpaintingPreferences({
+      ...inpaintingPreferences,
+      [id]: checked
+    });
+  };
+
+  // Handle adding text to canvas
+  const handleAddToCanvas = (translation: Translation) => {
+    onAddTextToCanvas({
+      ...translation,
+      useInpainting: inpaintingPreferences[translation.id] || false
+    });
   };
 
   if (translations.length === 0) {
@@ -137,6 +161,19 @@ const TranslationPanel: FC<TranslationPanelProps> = ({
               )}
             </div>
             
+            <div className="mb-3 flex items-center">
+              <input
+                type="checkbox"
+                id={`inpaint-${translation.id}`}
+                className="mr-2 h-4 w-4 text-primary-500 border-gray-300 rounded focus:ring-primary-500"
+                checked={inpaintingPreferences[translation.id] || false}
+                onChange={(e) => handleInpaintingToggle(translation.id, e.target.checked)}
+              />
+              <label htmlFor={`inpaint-${translation.id}`} className="text-xs text-gray-600">
+                Use Inpainting
+              </label>
+            </div>
+            
             <div className="flex justify-end gap-2">
               <button 
                 className="text-gray-600 text-xs hover:text-gray-800 flex items-center gap-1"
@@ -150,7 +187,7 @@ const TranslationPanel: FC<TranslationPanelProps> = ({
               
               <button 
                 className="bg-primary-500 text-white text-xs px-2 py-1 rounded hover:bg-primary-600 flex items-center gap-1"
-                onClick={() => onAddTextToCanvas(translation)}
+                onClick={() => handleAddToCanvas(translation)}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />

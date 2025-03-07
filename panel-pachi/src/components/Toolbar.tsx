@@ -1,4 +1,5 @@
 import { type FC } from 'react';
+import { FONT_OPTIONS, FONT_SIZE_OPTIONS } from '../App';
 
 interface ToolbarProps {
   currentTool: string;
@@ -9,6 +10,14 @@ interface ToolbarProps {
   isInpainting?: boolean;
   isTranslating?: boolean;
   hasSelections?: boolean;
+  // Text styling options
+  showTextOptions?: boolean;
+  textFont?: string;
+  textSize?: number;
+  textColor?: string;
+  onTextFontChange?: (font: string) => void;
+  onTextSizeChange?: (size: number) => void;
+  onTextColorChange?: (color: string) => void;
 }
 
 const Toolbar: FC<ToolbarProps> = ({ 
@@ -19,7 +28,15 @@ const Toolbar: FC<ToolbarProps> = ({
   onTranslateSelected,
   isInpainting = false,
   isTranslating = false,
-  hasSelections = false
+  hasSelections = false,
+  // Text styling options
+  showTextOptions = false,
+  textFont = 'Arial',
+  textSize = 18,
+  textColor = '#000000',
+  onTextFontChange,
+  onTextSizeChange,
+  onTextColorChange
 }) => {
   return (
     <div className="flex items-center gap-4 p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -81,9 +98,9 @@ const Toolbar: FC<ToolbarProps> = ({
         ) : (
           <>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M7 2a1 1 0 011 1v1h3a1 1 0 110 2H9.578l-.29 1H11a1 1 0 110 2H8.422l-1.165 4.1a1 1 0 01-.963.9H5a1 1 0 110-2h.719l.345-1H4a1 1 0 110-2h2.883l.29-1H5a1 1 0 110-2h3V3a1 1 0 011-1z" clipRule="evenodd" />
+              <path fillRule="evenodd" d="M7 2a1 1 0 011 1v1h3a1 1 0 110 2H9.578a18.87 18.87 0 01-1.724 4.78c.29.354.596.696.914 1.026a1 1 0 11-1.44 1.389c-.188-.196-.373-.396-.554-.6a19.098 19.098 0 01-3.107 3.567 1 1 0 01-1.334-1.49 17.087 17.087 0 003.13-3.733 18.992 18.992 0 01-1.487-2.494 1 1 0 111.79-.89c.234.47.489.928.764 1.372.417-.934.752-1.913.997-2.927H3a1 1 0 110-2h3V3a1 1 0 011-1zm6 6a1 1 0 01.894.553l2.991 5.982a.869.869 0 01.02.037l.99 1.98a1 1 0 11-1.79.895L15.383 16h-4.764l-.724 1.447a1 1 0 11-1.788-.894l.99-1.98.019-.038 2.99-5.982A1 1 0 0113 8zm-1.382 6h2.764L13 11.236 11.618 14z" clipRule="evenodd" />
             </svg>
-            <span>Translate Selected</span>
+            <span>Translate</span>
           </>
         )}
       </button>
@@ -91,12 +108,12 @@ const Toolbar: FC<ToolbarProps> = ({
       {/* Inpaint Button */}
       <button
         className={`
-          btn btn-sm btn-primary
+          btn btn-sm ${currentTool === 'mask' ? 'btn-primary' : 'btn-outline'}
           flex items-center gap-1.5
           ${isInpainting ? 'opacity-75 cursor-not-allowed' : ''}
         `}
         onClick={onExportMask}
-        disabled={!onExportMask || isInpainting || isTranslating}
+        disabled={!onExportMask || isInpainting}
         title="Inpaint the masked areas"
       >
         {isInpainting ? (
@@ -130,10 +147,65 @@ const Toolbar: FC<ToolbarProps> = ({
         <span>Undo</span>
       </button>
       
-      {/* Tips on the right */}
-      <div className="ml-auto text-xs px-3 py-1.5 bg-gray-50 text-gray-500 rounded border border-gray-200">
-        <span className="text-primary-600 font-semibold">Tip:</span> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
-      </div>
+      {/* Text Styling Controls (replaces tips) */}
+      {showTextOptions ? (
+        <div className="ml-auto flex items-center gap-3 bg-blue-50 px-3 py-1.5 rounded border border-blue-200 shadow-sm" data-text-controls="true">
+          <div className="flex items-center gap-1.5" data-text-controls="true">
+            <span className="text-xs font-semibold text-blue-700">Text Styling:</span>
+          </div>
+          
+          {/* Font Family Dropdown */}
+          <div className="flex items-center gap-1.5" data-text-controls="true">
+            <label htmlFor="font-family" className="text-xs text-gray-600">Font:</label>
+            <select 
+              id="font-family"
+              className="select select-xs bg-white border border-gray-300 max-w-[120px] hover:border-blue-400 focus:border-blue-500 focus:ring focus:ring-blue-200"
+              value={textFont}
+              onChange={(e) => onTextFontChange?.(e.target.value)}
+              data-text-controls="true"
+            >
+              {FONT_OPTIONS.map((font) => (
+                <option key={font.value} value={font.value} data-text-controls="true">{font.label}</option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Font Size Dropdown */}
+          <div className="flex items-center gap-1.5" data-text-controls="true">
+            <label htmlFor="font-size" className="text-xs text-gray-600">Size:</label>
+            <select 
+              id="font-size"
+              className="select select-xs bg-white border border-gray-300 max-w-[80px] hover:border-blue-400 focus:border-blue-500 focus:ring focus:ring-blue-200"
+              value={textSize}
+              onChange={(e) => onTextSizeChange?.(Number(e.target.value))}
+              data-text-controls="true"
+            >
+              {FONT_SIZE_OPTIONS.map((size) => (
+                <option key={size.value} value={size.value} data-text-controls="true">{size.label}</option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Color Picker */}
+          <div className="flex items-center gap-1.5" data-text-controls="true">
+            <label htmlFor="text-color" className="text-xs text-gray-600">Color:</label>
+            <div className="relative" data-text-controls="true">
+              <input 
+                type="color" 
+                id="text-color"
+                className="w-6 h-6 rounded cursor-pointer border border-gray-300 hover:border-blue-400" 
+                value={textColor}
+                onChange={(e) => onTextColorChange?.(e.target.value)}
+                data-text-controls="true"
+              />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="ml-auto text-xs px-3 py-1.5 bg-gray-50 text-gray-500 rounded border border-gray-200">
+          <span className="text-primary-600 font-semibold">Tip:</span> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
+        </div>
+      )}
     </div>
   );
 };
