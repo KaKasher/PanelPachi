@@ -34,6 +34,12 @@ interface SelectionRect {
   };
 }
 
+// Define a type for history actions
+type HistoryAction = {
+  type: 'path' | 'selection' | 'inpainting';
+  data: any;
+};
+
 const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onSelectionHover }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
@@ -60,7 +66,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   // Store the current inpainted image as a blob
   const currentImageBlobRef = useRef<Blob | null>(null);
   // Stack to track drawable objects for undo functionality
-  const historyStackRef = useRef<any[]>([]);
+  const historyStackRef = useRef<HistoryAction[]>([]);
   
   // Ref for tracking selections
   const selectionsRef = useRef<SelectionRect[]>([]);
@@ -207,7 +213,10 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     canvas.renderAll();
     
     // Add to history stack for undo
-    historyStackRef.current.push(textObject);
+    historyStackRef.current.push({
+      type: 'selection',
+      data: textObject
+    });
   };
   
   // Function to highlight a selection by ID
@@ -408,12 +417,61 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     }
     
     // Get the last object from the history stack
-    const lastObject = historyStackRef.current.pop();
+    const lastAction = historyStackRef.current.pop();
     
+    // Handle different types of actions
+    if (lastAction && typeof lastAction === 'object' && 'type' in lastAction) {
+      // This is a typed action object
+      if (lastAction.type === 'inpainting') {
+        // Handle inpainting undo
+        handleInpaintingUndo(lastAction.data);
+        return;
+      } else if (lastAction.type === 'path') {
+        // Handle path undo
+        const objects = canvas.getObjects();
+        for (let i = 0; i < objects.length; i++) {
+          if (objects[i] === lastAction.data) {
+            // Remove found object from canvas
+            canvas.remove(objects[i]);
+            canvas.renderAll();
+            break;
+          }
+        }
+        
+        setLoadingStatus("Undone drawing");
+        setTimeout(() => {
+          if (loadingStatus === "Undone drawing") {
+            setLoadingStatus("");
+          }
+        }, 1500);
+        return;
+      } else if (lastAction.type === 'selection') {
+        // Handle text selection undo
+        const objects = canvas.getObjects();
+        for (let i = 0; i < objects.length; i++) {
+          if (objects[i] === lastAction.data) {
+            // Remove found object from canvas
+            canvas.remove(objects[i]);
+            canvas.renderAll();
+            break;
+          }
+        }
+        
+        setLoadingStatus("Undone text placement");
+        setTimeout(() => {
+          if (loadingStatus === "Undone text placement") {
+            setLoadingStatus("");
+          }
+        }, 1500);
+        return;
+      }
+    }
+    
+    // Fallback for legacy history stack items (backward compatibility)
     // Find the object on the canvas and remove it
     const objects = canvas.getObjects();
     for (let i = 0; i < objects.length; i++) {
-      if (objects[i] === lastObject) {
+      if (objects[i] === lastAction) {
         // Remove found object from canvas
         canvas.remove(objects[i]);
         canvas.renderAll();
@@ -427,6 +485,87 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         setLoadingStatus("");
       }
     }, 1500);
+  };
+  
+  // Helper function to handle inpainting undo
+  const handleInpaintingUndo = async (data: any) => {
+    if (!fabricCanvasRef.current) return;
+    
+    try {
+      setLoadingStatus("Restoring previous image...");
+      
+      const canvas = fabricCanvasRef.current;
+      
+      // Clear the canvas
+      canvas.clear();
+      
+      if (!data || !data.imageBlob) {
+        setLoadingStatus("No previous image data available");
+        setTimeout(() => setLoadingStatus(""), 1500);
+        return;
+      }
+      
+      // Create a URL from the blob
+      const imageUrl = URL.createObjectURL(data.imageBlob);
+      
+      // Create a new image element
+      const img = new Image();
+      img.src = imageUrl;
+      
+      img.onload = () => {
+        if (!fabricCanvasRef.current) {
+          URL.revokeObjectURL(imageUrl);
+          return;
+        }
+        
+        // Restore original dimensions
+        if (data.dimensions) {
+          originalImageDimensionsRef.current = data.dimensions;
+        }
+        
+        // Create a fabric image from the original image
+        const fabricImg = new FabricImage(img);
+        
+        // Get the canvas dimensions
+        const canvasWidth = canvas.getWidth();
+        const canvasHeight = canvas.getHeight();
+        
+        // Calculate scaling to fit the image in the canvas
+        const scaleX = canvasWidth / img.width;
+        const scaleY = canvasHeight / img.height;
+        const scale = Math.min(scaleX, scaleY);
+        
+        fabricImg.scale(scale);
+        
+        // Center the image on the canvas
+        canvas.centerObject(fabricImg);
+        fabricImg.selectable = false;
+        fabricImg.evented = false;
+        
+        // Add the image to the canvas
+        canvas.add(fabricImg);
+        canvas.renderAll();
+        
+        // Restore the current image blob reference
+        currentImageBlobRef.current = data.imageBlob;
+        
+        setLoadingStatus("Previous image restored");
+        setTimeout(() => setLoadingStatus(""), 1500);
+        
+        // Clean up the URL
+        URL.revokeObjectURL(imageUrl);
+      };
+      
+      img.onerror = () => {
+        setLoadingStatus("Failed to restore previous image");
+        setTimeout(() => setLoadingStatus(""), 1500);
+        URL.revokeObjectURL(imageUrl);
+      };
+    } catch (error) {
+      console.error("Error restoring previous image:", error);
+      setLoadingStatus("Failed to restore previous image");
+      setTimeout(() => setLoadingStatus(""), 1500);
+    }
   };
   
   // Update the original image file reference when the image prop changes
@@ -449,6 +588,41 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       }
       
       try {
+        // Save the current image state before inpainting
+        let previousImageBlob: Blob | null = null;
+        let previousDimensions = originalImageDimensionsRef.current;
+        
+        // Create a copy of the current image blob if available
+        if (currentImageBlobRef.current) {
+          previousImageBlob = currentImageBlobRef.current.slice(0);
+        } else if (originalImageFileRef.current) {
+          // Convert the original file to blob if we don't have a current image blob
+          const reader = new FileReader();
+          previousImageBlob = await new Promise<Blob | null>((resolveBlob) => {
+            reader.onload = async (event) => {
+              if (event.target?.result) {
+                const blob = await fetch(event.target.result as string).then(r => r.blob());
+                resolveBlob(blob);
+              } else {
+                resolveBlob(null);
+              }
+            };
+            reader.onerror = () => resolveBlob(null);
+            reader.readAsDataURL(originalImageFileRef.current!);
+          });
+        }
+        
+        // If we have a previous image state, add it to the history stack
+        if (previousImageBlob) {
+          historyStackRef.current.push({
+            type: 'inpainting',
+            data: {
+              imageBlob: previousImageBlob,
+              dimensions: previousDimensions
+            }
+          });
+        }
+        
         setIsInpainting(true);
         isInpaintingRef.current = true;
         setLoadingStatus("Processing inpainting...");
@@ -702,9 +876,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             canvas.add(fabricImg);
             canvas.renderAll();
             
-            // Clear the history stack
-            historyStackRef.current = [];
-            
             // Reset inpainting state
             setIsInpainting(false);
             isInpaintingRef.current = false;
@@ -712,6 +883,12 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             
             // Clean up the URL
             URL.revokeObjectURL(inpaintedImageUrl);
+            
+            // After the inpainting is complete, clear the drawn paths from the canvas
+            // Find and remove all path objects from the canvas
+            const pathObjects = canvas.getObjects().filter(obj => obj.type === 'path');
+            pathObjects.forEach(obj => canvas.remove(obj));
+            canvas.renderAll();
             
             resolve();
           };
@@ -923,7 +1100,10 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       // Only add to history if not currently inpainting
       if (!isInpaintingRef.current) {
         const path = e.path;
-        historyStackRef.current.push(path);
+        historyStackRef.current.push({
+          type: 'path',
+          data: path
+        });
       }
     });
     
