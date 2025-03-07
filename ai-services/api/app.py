@@ -57,10 +57,6 @@ MODELS_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) /
 INPAINTING_DIR = MODELS_DIR / "inpainting"
 INPAINTING_SCRIPT = INPAINTING_DIR / "inpaint_api.py"
 
-# Debug output directory
-DEBUG_OUTPUT_DIR = SCRIPT_DIR / "debug_output"
-DEBUG_OUTPUT_DIR.mkdir(exist_ok=True)
-
 # Get DeepL API key from environment variable
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
 if not DEEPL_API_KEY:
@@ -229,22 +225,6 @@ async def inpaint_image(
                 detail="Inpainting did not produce output file"
             )
         
-        # For debugging: Save a copy of the inpainted image
-        debug_output_dir = Path("debug_output")
-        debug_output_dir.mkdir(exist_ok=True)
-        debug_output_path = debug_output_dir / f"inpainted_{image.filename}"
-        import shutil
-        shutil.copy(tmp_output_path, debug_output_path)
-        print(f"Saved debug inpainted image to: {debug_output_path}")
-        
-        # Also save the input image and mask for comparison
-        input_debug_path = debug_output_dir / f"input_{image.filename}"
-        mask_debug_path = debug_output_dir / f"mask_{image.filename.replace('.jpg', '.png').replace('.jpeg', '.png')}"
-        shutil.copy(tmp_image_path, input_debug_path)
-        shutil.copy(tmp_mask_path, mask_debug_path)
-        print(f"Saved debug input image to: {input_debug_path}")
-        print(f"Saved debug mask image to: {mask_debug_path}")
-        
         # Convert output to base64
         with open(tmp_output_path, "rb") as f:
             output_data = f.read()
@@ -258,7 +238,7 @@ async def inpaint_image(
                 path.unlink()
                 
         # Determine image format for the data URL
-        image_format = "jpeg" if debug_output_path.suffix.lower() in ['.jpg', '.jpeg'] else "png"
+        image_format = "jpeg" if tmp_output_path.suffix.lower() in ['.jpg', '.jpeg'] else "png"
                 
         return InpaintResponse(
             success=True,
@@ -344,81 +324,6 @@ if __name__ == "__main__":
     # Make it executable
     os.chmod(INPAINTING_SCRIPT, 0o755)
 
-# Create a function to save debug info
-def save_debug_info(image, selections_data, prefix="debug"):
-    """
-    Save debug information about the OCR process.
-    
-    Args:
-        image: The original image (PIL Image)
-        selections_data: List of selection objects with coordinates
-        prefix: A prefix for the debug files
-    """
-    try:
-        timestamp = int(time.time())
-        debug_dir = DEBUG_OUTPUT_DIR / f"{prefix}_{timestamp}"
-        debug_dir.mkdir(exist_ok=True)
-        
-        # Save full image
-        full_image_path = debug_dir / "full_image.png"
-        image.save(full_image_path)
-        logger.info(f"Saved full image to {full_image_path}")
-        
-        # Save selections info
-        selections_path = debug_dir / "selections.json"
-        with open(selections_path, 'w') as f:
-            json.dump(selections_data, f, indent=2)
-        logger.info(f"Saved selections data to {selections_path}")
-        
-        # Save each crop
-        img_array = np.array(image)
-        for idx, selection in enumerate(selections_data):
-            selection_id = selection.get("id", f"unknown_{idx}")
-            left = int(selection.get("left", 0))
-            top = int(selection.get("top", 0))
-            width = int(selection.get("width", 100))
-            height = int(selection.get("height", 100))
-            
-            # Ensure coordinates are within image bounds
-            left = max(0, left)
-            top = max(0, top)
-            
-            # Check image dimensions
-            if len(img_array.shape) < 2:
-                logger.error(f"Invalid image array shape: {img_array.shape}")
-                continue
-                
-            if len(img_array.shape) == 2:
-                img_height, img_width = img_array.shape
-            else:
-                img_height, img_width = img_array.shape[:2]
-                
-            width = min(width, img_width - left)
-            height = min(height, img_height - top)
-            
-            # Crop the image
-            try:
-                if width <= 0 or height <= 0:
-                    logger.error(f"Invalid crop dimensions: width={width}, height={height}")
-                    continue
-                    
-                cropped = img_array[top:top+height, left:left+width]
-                crop_path = debug_dir / f"crop_{selection_id}.png"
-                Image.fromarray(cropped).save(crop_path)
-                logger.info(f"Saved crop {selection_id} to {crop_path}")
-                
-                # Save crop coordinates
-                coords_path = debug_dir / f"coords_{selection_id}.txt"
-                with open(coords_path, 'w') as f:
-                    f.write(f"left: {left}, top: {top}, width: {width}, height: {height}")
-            except Exception as e:
-                logger.error(f"Error saving crop {selection_id}: {str(e)}")
-                
-        return debug_dir
-    except Exception as e:
-        logger.error(f"Error in save_debug_info: {str(e)}")
-        return None
-
 @app.post("/ocr", response_model=List[OCRItem])
 async def process_ocr(
     image: UploadFile = File(...),
@@ -440,10 +345,6 @@ async def process_ocr(
         
         # Log image info
         logger.info(f"Image dimensions: {img.size}, mode: {img.mode}, array shape: {img_array.shape}")
-        
-        # Save debug information
-        debug_dir = save_debug_info(img, selections_data, prefix="ocr")
-        logger.info(f"Debug information saved to {debug_dir}")
         
         # Initialize the OCR model (using singleton pattern)
         ocr_model = get_ocr_instance()
@@ -484,11 +385,8 @@ async def process_ocr(
                 # Crop the image
                 cropped = img_array[top:top+height, left:left+width]
                 
-                # Save the cropped image for debugging
-                debug_crop_path = DEBUG_OUTPUT_DIR / f"ocr_crop_{selection_id}.png"
+                # Convert crop to PIL Image
                 cropped_img = Image.fromarray(cropped)
-                cropped_img.save(debug_crop_path)
-                logger.info(f"Saved crop for debugging: {debug_crop_path}")
                 
                 # Perform OCR on the cropped image
                 logger.info(f"Running OCR on selection {selection_id}")
