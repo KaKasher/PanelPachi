@@ -333,8 +333,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       // Increment selection counter
       selectionCounterRef.current += 1;
       
-      // Add to selections array
-      selectionsRef.current.push({
+      // Create a selection object
+      const selection = {
         id: selectionCounterRef.current.toString(),
         fabricObject: rect,
         bounds: {
@@ -343,7 +343,10 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           width: rect.width!,
           height: rect.height!
         }
-      });
+      };
+      
+      // Add to selections array
+      selectionsRef.current.push(selection);
       
       // Notify parent component about selections change
       if (onSelectionsChange) {
@@ -367,6 +370,34 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     
     // If no history, nothing to undo
     if (historyStackRef.current.length === 0) {
+      // Check if we have any selections to undo
+      if (selectionsRef.current.length > 0) {
+        // Get the last selection
+        const lastSelection = selectionsRef.current[selectionsRef.current.length - 1];
+        
+        // Remove the selection from the canvas
+        canvas.remove(lastSelection.fabricObject);
+        
+        // Remove from selections array
+        selectionsRef.current.pop();
+        
+        // Update has selections state
+        if (onSelectionsChange) {
+          onSelectionsChange(selectionsRef.current.length > 0);
+        }
+        
+        canvas.renderAll();
+        
+        setLoadingStatus("Selection undone");
+        setTimeout(() => {
+          if (loadingStatus === "Selection undone") {
+            setLoadingStatus("");
+          }
+        }, 1500);
+        
+        return;
+      }
+      
       setLoadingStatus("Nothing to undo");
       setTimeout(() => {
         if (loadingStatus === "Nothing to undo") {
@@ -900,7 +931,36 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     setLoadingStatus("Canvas initialized");
     setTimeout(() => setLoadingStatus(""), 1500);
     
-  }, [tool]); // Run when tool changes
+  }, []); // Run only once when component mounts
+  
+  // Update canvas settings when tool changes
+  useEffect(() => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Update drawing mode based on current tool
+    canvas.isDrawingMode = tool === 'mask' && !isInpainting;
+    
+    // Update cursor for the correct tool
+    if (tool === 'mask' && !isInpainting) {
+      // Configure brush
+      if (canvas.freeDrawingBrush) {
+        canvas.freeDrawingBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
+        canvas.freeDrawingBrush.width = brushSizeRef.current;
+      }
+      updateBrushCursor(brushSizeRef.current);
+    } else if (tool === 'selection' && !isInpainting) {
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'crosshair';
+      }
+    } else {
+      if (containerRef.current) {
+        containerRef.current.style.cursor = isInpainting ? 'wait' : 'default';
+      }
+    }
+    
+  }, [tool, isInpainting]); // Run when tool changes or inpainting state changes
   
   // Handle image changes in a separate effect
   useEffect(() => {
@@ -1236,30 +1296,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       document.head.removeChild(styleElement);
     };
   }, []);
-  
-  // Update drawing mode when tool changes
-  useEffect(() => {
-    if (!fabricCanvasRef.current) return;
-    
-    const canvas = fabricCanvasRef.current;
-    
-    // Only enable drawing mode if not currently inpainting
-    canvas.isDrawingMode = tool === 'mask' && !isInpainting;
-    
-    // Make sure we update the brush when tool changes
-    if (tool === 'mask' && canvas.freeDrawingBrush && !isInpainting) {
-      canvas.freeDrawingBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
-      canvas.freeDrawingBrush.width = brushSizeRef.current;
-      
-      // Update cursor
-      updateBrushCursor(brushSizeRef.current);
-    } else {
-      // Reset cursor
-      if (containerRef.current) {
-        containerRef.current.style.cursor = isInpainting ? 'wait' : 'default';
-      }
-    }
-  }, [tool, isInpainting]);
   
   // Add event handlers for fabric canvas
   useEffect(() => {
