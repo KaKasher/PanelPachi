@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import ImageUploader from './components/ImageUploader';
 import CanvasEditor from './components/CanvasEditor';
 import Toolbar from './components/Toolbar';
+import TranslationPanel from './components/TranslationPanel';
 import type { CanvasEditorRef } from './components/CanvasEditor';
+import type { Translation } from './components/TranslationPanel';
 
 // Get API URL from environment variables
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -13,8 +15,12 @@ function App() {
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
   const [isInpainting, setIsInpainting] = useState<boolean>(false);
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [alertType, setAlertType] = useState<'success' | 'error'>('success');
   const [apiConnected, setApiConnected] = useState<boolean | null>(null);
+  const [hasSelections, setHasSelections] = useState<boolean>(false);
+  const [showTranslationsPanel, setShowTranslationsPanel] = useState<boolean>(false);
+  const [translations, setTranslations] = useState<Translation[]>([]);
   
   // Create a ref for the CanvasEditor component
   const canvasEditorRef = useRef<CanvasEditorRef>(null);
@@ -88,6 +94,8 @@ function App() {
 
   const handleReset = () => {
     setUploadedImage(null);
+    setTranslations([]);
+    setShowTranslationsPanel(false);
   };
   
   // Handle export mask functionality
@@ -124,6 +132,165 @@ function App() {
     }
   };
   
+  // Handle translate selected functionality
+  const handleTranslateSelected = async () => {
+    if (!apiConnected || !canvasEditorRef.current) {
+      setSnackbarMessage("Cannot translate: The backend API is not connected. Please start the API server and try again.");
+      setAlertType('error');
+      setSnackbarOpen(true);
+      return;
+    }
+
+    // Get the current selections from the canvas
+    const selections = canvasEditorRef.current.getSelections();
+    
+    if (selections.length === 0) {
+      setSnackbarMessage("No text areas selected. Please use the selection tool to mark text areas first.");
+      setAlertType('error');
+      setSnackbarOpen(true);
+      return;
+    }
+    
+    setIsTranslating(true);
+    
+    try {
+      // Prepare image data from canvas
+      const imageBlob = await getCanvasImageBlob();
+      if (!imageBlob) throw new Error("Failed to get image from canvas");
+      
+      // Store selection bounds for later use (they're already transformed to original image coordinates)
+      const selectionsBoundsMap = selections.reduce((map, selection) => {
+        map[selection.id] = {
+          left: selection.left,
+          top: selection.top,
+          width: selection.width,
+          height: selection.height
+        };
+        return map;
+      }, {} as Record<string, {left: number, top: number, width: number, height: number}>);
+      
+      // Create form data with the image and selections
+      const formData = new FormData();
+      formData.append('image', imageBlob, 'image.png');
+      formData.append('selections', JSON.stringify(selections));
+      
+      // Send to OCR endpoint
+      const ocrResponse = await fetch(`${API_URL}/ocr`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!ocrResponse.ok) throw new Error("OCR processing failed");
+      
+      const ocrData = await ocrResponse.json();
+      
+      // Prepare data for translation
+      const textsToTranslate = ocrData.map((item: {id: string, text: string}) => ({
+        id: item.id,
+        text: item.text
+      }));
+      
+      // Send to translation endpoint
+      const translationResponse = await fetch(`${API_URL}/translate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(textsToTranslate)
+      });
+      
+      if (!translationResponse.ok) throw new Error("Translation failed");
+      
+      const translationData = await translationResponse.json();
+      
+      // Process and update the UI with translations
+      const translationsWithBounds = translationData.map((item: {id: string, original: string, translated: string}) => {
+        const bounds = selectionsBoundsMap[item.id] || {
+          left: 0,
+          top: 0,
+          width: 100,
+          height: 50
+        };
+        
+        return {
+          id: item.id,
+          original: item.original,
+          translated: item.translated,
+          bounds
+        };
+      });
+      
+      // Update state with translations
+      setTranslations(translationsWithBounds);
+      setShowTranslationsPanel(true);
+      
+      setSnackbarMessage("Translation completed successfully!");
+      setAlertType('success');
+      setSnackbarOpen(true);
+    } catch (error: any) {
+      setSnackbarMessage(`Translation failed: ${error.message || 'Unknown error'}`);
+      setAlertType('error');
+      setSnackbarOpen(true);
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+  
+  // Helper function to get image blob from canvas
+  const getCanvasImageBlob = (): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      if (!uploadedImage) {
+        resolve(null);
+        return;
+      }
+      
+      // Use FileReader to get the image data
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          // Create an image element
+          const img = new Image();
+          img.onload = () => {
+            // Create a canvas to get the image data
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx?.drawImage(img, 0, 0);
+            
+            // Get the image as a blob
+            canvas.toBlob((blob) => {
+              resolve(blob);
+            }, 'image/png');
+          };
+          img.src = event.target.result as string;
+        } else {
+          resolve(null);
+        }
+      };
+      reader.readAsDataURL(uploadedImage);
+    });
+  };
+  
+  // Handle selection hover
+  const handleSelectionHover = (id: string | null) => {
+    if (canvasEditorRef.current) {
+      canvasEditorRef.current.highlightSelection(id);
+    }
+  };
+  
+  // Handle adding text to canvas
+  const handleAddTextToCanvas = (translation: Translation) => {
+    if (canvasEditorRef.current) {
+      canvasEditorRef.current.addTextToCanvas(translation);
+    }
+  };
+  
+  // Handle closing the translations panel
+  const handleCloseTranslationsPanel = () => {
+    setShowTranslationsPanel(false);
+  };
+  
   const handleSnackbarClose = () => {
     setSnackbarOpen(false);
   };
@@ -145,7 +312,10 @@ function App() {
                 onToolChange={setCurrentTool}
                 onExportMask={apiConnected ? handleExportMask : undefined}
                 onUndo={handleUndo}
+                onTranslateSelected={apiConnected ? handleTranslateSelected : undefined}
                 isInpainting={isInpainting}
+                isTranslating={isTranslating}
+                hasSelections={hasSelections}
               />
               
               <div className="flex items-center">
@@ -156,7 +326,7 @@ function App() {
                 <button
                   className="btn btn-sm btn-outline flex items-center gap-1.5"
                   onClick={handleReset}
-                  disabled={isInpainting}
+                  disabled={isInpainting || isTranslating}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
@@ -166,12 +336,25 @@ function App() {
               </div>
             </div>
             
-            <div className="flex-1 relative overflow-hidden rounded-lg border border-gray-200 shadow-md">
-              <CanvasEditor 
-                ref={canvasEditorRef}
-                image={uploadedImage} 
-                tool={currentTool} 
-              />
+            <div className="flex-1 flex overflow-hidden rounded-lg border border-gray-200 shadow-md">
+              <div className={`flex-1 relative overflow-hidden ${showTranslationsPanel ? 'border-r border-gray-200' : ''}`}>
+                <CanvasEditor 
+                  ref={canvasEditorRef}
+                  image={uploadedImage} 
+                  tool={currentTool}
+                  onSelectionsChange={setHasSelections}
+                  onSelectionHover={handleSelectionHover}
+                />
+              </div>
+              
+              {showTranslationsPanel && (
+                <TranslationPanel 
+                  translations={translations}
+                  onAddTextToCanvas={handleAddTextToCanvas}
+                  onSelectionHover={handleSelectionHover}
+                  onClose={handleCloseTranslationsPanel}
+                />
+              )}
             </div>
           </>
         ) : (

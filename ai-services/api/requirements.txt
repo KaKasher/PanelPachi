@@ -1,7 +1,10 @@
-fastapi>=0.104.0
-uvicorn>=0.23.2
+fastapi>=0.95.1
 python-multipart>=0.0.6
-Pillow>=10.0.0
-numpy>=1.19.0
-python-dotenv>=1.0.0
-opencv-python>=4.5.0
+uvicorn>=0.22.0
+Pillow>=9.0.0
+opencv-python>=4.7.0.0
+requests>=2.30.0
+numpy>=1.21.0
+python-dotenv>=0.21.0
+transformers>=4.20.0
+torch>=1.10.0

@@ -1,21 +1,40 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
-import { Canvas, Image as FabricImage, PencilBrush } from 'fabric';
+import { Canvas, Image as FabricImage, PencilBrush, Rect } from 'fabric';
+import { Translation } from './TranslationPanel';
 
 interface CanvasEditorProps {
   image: File | null;
   tool: string;
+  onSelectionsChange?: (hasSelections: boolean) => void;
+  onSelectionHover?: (id: string | null) => void;
 }
 
 // Create a type for the functions that will be exposed via the ref
 export interface CanvasEditorRef {
   exportMask: () => Promise<void>;
   undo: () => void;
+  getSelections: () => { id: string, left: number, top: number, width: number, height: number }[];
+  clearSelections: () => void;
+  highlightSelection: (id: string | null) => void;
+  addTextToCanvas: (translation: Translation) => void;
 }
 
 // Add API URL configuration
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool }, ref) => {
+// Type for selection objects
+interface SelectionRect {
+  id: string;
+  fabricObject: Rect;
+  bounds: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+}
+
+const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onSelectionHover }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -43,6 +62,15 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   // Stack to track drawable objects for undo functionality
   const historyStackRef = useRef<any[]>([]);
   
+  // Ref for tracking selections
+  const selectionsRef = useRef<SelectionRect[]>([]);
+  // Ref for tracking current selection being drawn
+  const currentSelectionRef = useRef<Rect | null>(null);
+  // Ref to track selection counter
+  const selectionCounterRef = useRef<number>(0);
+  // Ref for starting point of rectangle
+  const startPointRef = useRef<{ x: number, y: number } | null>(null);
+  
   // Expose functions to the parent component via ref
   useImperativeHandle(ref, () => ({
     exportMask: () => {
@@ -50,8 +78,286 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     },
     undo: () => {
       undoLastAction();
+    },
+    getSelections: () => {
+      // We need to convert from canvas coordinates to original image coordinates
+      if (!fabricCanvasRef.current || !originalImageDimensionsRef.current) {
+        return selectionsRef.current.map(selection => ({
+          id: selection.id,
+          ...selection.bounds
+        }));
+      }
+      
+      const canvas = fabricCanvasRef.current;
+      
+      // Get the background image (first object) to calculate the transformation
+      const objects = canvas.getObjects();
+      const backgroundImage = objects.find(obj => obj instanceof FabricImage);
+      
+      if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
+        console.error("Background image not found for coordinate transformation");
+        return selectionsRef.current.map(selection => ({
+          id: selection.id,
+          ...selection.bounds
+        }));
+      }
+      
+      // Get the original image dimensions
+      const originalDimensions = originalImageDimensionsRef.current;
+      
+      // Get the background image scaling and position
+      const imgWidth = backgroundImage.width || 1;
+      const imgHeight = backgroundImage.height || 1;
+      const imgScaleX = (backgroundImage as any).scaleX || 1;
+      const imgScaleY = (backgroundImage as any).scaleY || 1;
+      const imgLeft = backgroundImage.left || 0;
+      const imgTop = backgroundImage.top || 0;
+      
+      // Calculate scaling factors to map from canvas coordinates to original image dimensions
+      const scaleX = originalDimensions.width / (imgWidth * imgScaleX);
+      const scaleY = originalDimensions.height / (imgHeight * imgScaleY);
+      
+      // Transform each selection's coordinates
+      return selectionsRef.current.map(selection => {
+        // Adjust coordinates relative to the image's position on canvas
+        const relativeLeft = selection.bounds.left - imgLeft;
+        const relativeTop = selection.bounds.top - imgTop;
+        
+        // Scale to original image coordinates
+        const originalLeft = Math.round(relativeLeft * scaleX);
+        const originalTop = Math.round(relativeTop * scaleY);
+        const originalWidth = Math.round(selection.bounds.width * scaleX);
+        const originalHeight = Math.round(selection.bounds.height * scaleY);
+        
+        // Ensure coordinates are not negative
+        return {
+          id: selection.id,
+          left: Math.max(0, originalLeft),
+          top: Math.max(0, originalTop),
+          width: originalWidth,
+          height: originalHeight
+        };
+      });
+    },
+    clearSelections: () => {
+      clearAllSelections();
+    },
+    highlightSelection: (id: string | null) => {
+      highlightSelectionById(id);
+    },
+    addTextToCanvas: (translation: Translation) => {
+      addTranslatedTextToCanvas(translation);
     }
   }));
+  
+  // Function to add translated text to the canvas
+  const addTranslatedTextToCanvas = (translation: Translation) => {
+    if (!fabricCanvasRef.current || !originalImageDimensionsRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Get the background image (first object) to calculate the transformation
+    const objects = canvas.getObjects();
+    const backgroundImage = objects.find(obj => obj instanceof FabricImage);
+    
+    if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
+      console.error("Background image not found for coordinate transformation");
+      return;
+    }
+    
+    // Get the original image dimensions
+    const originalDimensions = originalImageDimensionsRef.current;
+    
+    // Get the background image scaling and position
+    const imgWidth = backgroundImage.width || 1;
+    const imgHeight = backgroundImage.height || 1;
+    const imgScaleX = (backgroundImage as any).scaleX || 1;
+    const imgScaleY = (backgroundImage as any).scaleY || 1;
+    const imgLeft = backgroundImage.left || 0;
+    const imgTop = backgroundImage.top || 0;
+    
+    // Calculate scaling factors to map from original image coordinates to canvas coordinates
+    const scaleX = (imgWidth * imgScaleX) / originalDimensions.width;
+    const scaleY = (imgHeight * imgScaleY) / originalDimensions.height;
+    
+    // Transform coordinates from original image to canvas
+    const canvasLeft = translation.bounds.left * scaleX + imgLeft;
+    const canvasTop = translation.bounds.top * scaleY + imgTop;
+    const canvasWidth = translation.bounds.width * scaleX;
+    const canvasHeight = translation.bounds.height * scaleY;
+    
+    // Create a text object using fabric.js global namespace
+    // which is how the library is typically used
+    const textObject = new (window as any).fabric.Textbox(translation.translated, {
+      left: canvasLeft,
+      top: canvasTop,
+      width: canvasWidth,
+      fontSize: 20,
+      fill: '#000000',
+      fontFamily: 'Arial',
+      textAlign: 'center',
+      selectable: true,
+      editable: true
+    });
+    
+    // Add to canvas
+    canvas.add(textObject);
+    // Fabric.js object methods are accessed through the global fabric namespace
+    (canvas as any).setActiveObject(textObject);
+    canvas.renderAll();
+    
+    // Add to history stack for undo
+    historyStackRef.current.push(textObject);
+  };
+  
+  // Function to highlight a selection by ID
+  const highlightSelectionById = (id: string | null) => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Reset all selections to default appearance
+    selectionsRef.current.forEach(selection => {
+      selection.fabricObject.set({
+        stroke: 'rgba(78, 13, 158, 0.8)',
+        strokeWidth: 2,
+        fill: 'rgba(78, 13, 158, 0.1)'
+      });
+    });
+    
+    // If an ID is provided, highlight that selection
+    if (id) {
+      const selectionToHighlight = selectionsRef.current.find(s => s.id === id);
+      if (selectionToHighlight) {
+        selectionToHighlight.fabricObject.set({
+          stroke: 'rgba(234, 88, 12, 0.8)',
+          strokeWidth: 3,
+          fill: 'rgba(234, 88, 12, 0.2)'
+        });
+      }
+    }
+    
+    canvas.renderAll();
+  };
+  
+  // Function to clear all selections
+  const clearAllSelections = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    
+    // Remove all selection rectangles from canvas
+    selectionsRef.current.forEach(selection => {
+      canvas.remove(selection.fabricObject);
+    });
+    
+    // Clear selections array
+    selectionsRef.current = [];
+    selectionCounterRef.current = 0;
+    
+    canvas.renderAll();
+    
+    // Notify parent component about selections change
+    if (onSelectionsChange) {
+      onSelectionsChange(false);
+    }
+  };
+  
+  // Function to handle selection mode mouse down
+  const handleSelectionStart = (options: any) => {
+    if (tool !== 'selection') return;
+    
+    // Get pointer coordinates
+    const pointer = fabricCanvasRef.current?.getPointer(options.e);
+    if (!pointer) return;
+    
+    // Store starting point
+    startPointRef.current = { x: pointer.x, y: pointer.y };
+    
+    // Create a new rectangle
+    const rect = new Rect({
+      left: pointer.x,
+      top: pointer.y,
+      width: 0,
+      height: 0,
+      strokeWidth: 2,
+      stroke: 'rgba(78, 13, 158, 0.8)',
+      fill: 'rgba(78, 13, 158, 0.1)',
+      selectable: false,
+      evented: false
+    });
+    
+    // Add to canvas
+    fabricCanvasRef.current?.add(rect);
+    
+    // Store current selection being drawn
+    currentSelectionRef.current = rect;
+  };
+  
+  // Function to handle selection mode mouse move
+  const handleSelectionMove = (options: any) => {
+    if (tool !== 'selection' || !startPointRef.current || !currentSelectionRef.current) return;
+    
+    // Get pointer coordinates
+    const pointer = fabricCanvasRef.current?.getPointer(options.e);
+    if (!pointer) return;
+    
+    // Calculate width and height
+    const width = Math.abs(pointer.x - startPointRef.current.x);
+    const height = Math.abs(pointer.y - startPointRef.current.y);
+    
+    // Adjust left and top if needed
+    const left = pointer.x < startPointRef.current.x ? pointer.x : startPointRef.current.x;
+    const top = pointer.y < startPointRef.current.y ? pointer.y : startPointRef.current.y;
+    
+    // Update rectangle
+    currentSelectionRef.current.set({
+      left: left,
+      top: top,
+      width: width,
+      height: height
+    });
+    
+    fabricCanvasRef.current?.renderAll();
+  };
+  
+  // Function to handle selection mode mouse up
+  const handleSelectionEnd = () => {
+    if (tool !== 'selection' || !currentSelectionRef.current || !startPointRef.current) return;
+    
+    // Get the rectangle
+    const rect = currentSelectionRef.current;
+    
+    // Only add if the rectangle has some size
+    if (rect.width! > 5 && rect.height! > 5) {
+      // Increment selection counter
+      selectionCounterRef.current += 1;
+      
+      // Add to selections array
+      selectionsRef.current.push({
+        id: selectionCounterRef.current.toString(),
+        fabricObject: rect,
+        bounds: {
+          left: rect.left!,
+          top: rect.top!,
+          width: rect.width!,
+          height: rect.height!
+        }
+      });
+      
+      // Notify parent component about selections change
+      if (onSelectionsChange) {
+        onSelectionsChange(true);
+      }
+    } else {
+      // Remove the rectangle if it's too small
+      fabricCanvasRef.current?.remove(rect);
+    }
+    
+    // Reset current selection and start point
+    currentSelectionRef.current = null;
+    startPointRef.current = null;
+  };
   
   // Function to undo the last action
   const undoLastAction = () => {
@@ -98,8 +404,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       originalImageFileRef.current = image;
       // Reset the current image blob when a new image is uploaded
       currentImageBlobRef.current = null;
-      // Clear the history stack when a new image is loaded
-      historyStackRef.current = [];
     }
   }, [image]);
   
@@ -956,6 +1260,27 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       }
     }
   }, [tool, isInpainting]);
+  
+  // Add event handlers for fabric canvas
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+    
+    // Mouse down event handler for selection tool
+    canvas.on('mouse:down', handleSelectionStart);
+    
+    // Mouse move event handler for selection tool
+    canvas.on('mouse:move', handleSelectionMove);
+    
+    // Mouse up event handler for selection tool
+    canvas.on('mouse:up', handleSelectionEnd);
+    
+    return () => {
+      canvas.off('mouse:down', handleSelectionStart);
+      canvas.off('mouse:move', handleSelectionMove);
+      canvas.off('mouse:up', handleSelectionEnd);
+    };
+  }, [tool]);
   
   // Render the component
   return (
