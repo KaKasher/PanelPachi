@@ -458,13 +458,110 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       textElement.style.cursor = 'move';
       textElement.style.zIndex = '1000'; // Ensure it's above the canvas elements
       textElement.innerText = translation.translated;
-      textElement.contentEditable = 'true';
+      textElement.contentEditable = 'false'; // Start as non-editable, enable on double-click
       textElement.dataset.textId = `text-${Date.now()}`;
       
       // Add highlight/selection styling
       textElement.style.outline = 'none'; // Remove default focus outline
       textElement.style.transition = 'box-shadow 0.2s';
-      
+
+      // Create resize handles (initially hidden)
+      const handles = ['nw', 'ne', 'se', 'sw'];
+      const handleElements: HTMLElement[] = [];
+
+      handles.forEach(position => {
+        const handle = document.createElement('div');
+        handle.className = `resize-handle resize-handle-${position}`;
+        handle.style.position = 'absolute';
+        handle.style.width = '12px';
+        handle.style.height = '12px';
+        handle.style.backgroundColor = 'white';
+        handle.style.border = '2px solid #0075ff';
+        handle.style.borderRadius = '50%';
+        handle.style.display = 'none'; // Initially hidden
+        handle.style.zIndex = '1001';
+        handle.style.boxShadow = '0 0 3px rgba(0, 0, 0, 0.3)';
+        handle.style.cursor = position === 'nw' ? 'nw-resize' : 
+                              position === 'ne' ? 'ne-resize' : 
+                              position === 'se' ? 'se-resize' : 'sw-resize';
+        
+        // Position the handles at the corners
+        if (position === 'nw') {
+          handle.style.top = '-6px';
+          handle.style.left = '-6px';
+        } else if (position === 'ne') {
+          handle.style.top = '-6px';
+          handle.style.right = '-6px';
+        } else if (position === 'se') {
+          handle.style.bottom = '-6px';
+          handle.style.right = '-6px';
+        } else if (position === 'sw') {
+          handle.style.bottom = '-6px';
+          handle.style.left = '-6px';
+        }
+        
+        handle.dataset.position = position;
+        handle.dataset.textId = textElement.dataset.textId;
+        textElement.appendChild(handle);
+        handleElements.push(handle);
+      });
+
+      // Helper function to show/hide resize handles
+      const toggleResizeHandles = (show: boolean) => {
+        handleElements.forEach(handle => {
+          handle.style.display = show ? 'block' : 'none';
+        });
+      };
+
+      // Add resize functionality
+      handleElements.forEach(handle => {
+        handle.addEventListener('mousedown', (e) => {
+          e.stopPropagation(); // Prevent text element's mousedown from firing
+          
+          const position = handle.dataset.position;
+          const startX = e.clientX;
+          const startY = e.clientY;
+          const startWidth = parseInt(textElement.style.width, 10);
+          const startHeight = parseInt(textElement.style.height, 10);
+          const startLeft = parseInt(textElement.style.left, 10);
+          const startTop = parseInt(textElement.style.top, 10);
+          
+          const onResizeMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();
+            
+            const dx = moveEvent.clientX - startX;
+            const dy = moveEvent.clientY - startY;
+            
+            // Resize based on which handle was grabbed
+            if (position === 'nw') {
+              textElement.style.left = `${startLeft + dx}px`;
+              textElement.style.top = `${startTop + dy}px`;
+              textElement.style.width = `${startWidth - dx}px`;
+              textElement.style.height = `${startHeight - dy}px`;
+            } else if (position === 'ne') {
+              textElement.style.top = `${startTop + dy}px`;
+              textElement.style.width = `${startWidth + dx}px`;
+              textElement.style.height = `${startHeight - dy}px`;
+            } else if (position === 'se') {
+              textElement.style.width = `${startWidth + dx}px`;
+              textElement.style.height = `${startHeight + dy}px`;
+            } else if (position === 'sw') {
+              textElement.style.left = `${startLeft + dx}px`;
+              textElement.style.width = `${startWidth - dx}px`;
+              textElement.style.height = `${startHeight + dy}px`;
+            }
+          };
+          
+          const onResizeUp = () => {
+            document.removeEventListener('mousemove', onResizeMove);
+            document.removeEventListener('mouseup', onResizeUp);
+          };
+          
+          document.addEventListener('mousemove', onResizeMove);
+          document.addEventListener('mouseup', onResizeUp);
+        });
+      });
+
       // Add click handler to track selected text
       textElement.addEventListener('mousedown', (e) => {
         // Set this element as the selected text
@@ -475,6 +572,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           allTextElements.forEach((el) => {
             if (el instanceof HTMLElement) {
               el.style.boxShadow = 'none';
+              // Hide resize handles for all other elements
+              const textId = el.dataset.textId;
+              if (textId && textId !== textElement.dataset.textId) {
+                const handles = el.querySelectorAll('.resize-handle');
+                handles.forEach(handle => {
+                  if (handle instanceof HTMLElement) {
+                    handle.style.display = 'none';
+                  }
+                });
+              }
             }
           });
         }
@@ -484,6 +591,9 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         
         // Add visual selection indicator
         textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
+        
+        // Show resize handles when selected
+        toggleResizeHandles(true);
         
         // Notify parent component of text selection
         handleTextSelectionChange(true);
@@ -514,7 +624,29 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           e.preventDefault();
         }
       });
-      
+
+      // Add double-click handler for editing
+      textElement.addEventListener('dblclick', (e) => {
+        // Enable contentEditable
+        textElement.contentEditable = 'true';
+        textElement.focus();
+        
+        // Change cursor to text
+        textElement.style.cursor = 'text';
+        
+        // Stop event propagation to prevent other handlers
+        e.stopPropagation();
+      });
+
+      // Add blur handler to exit edit mode
+      textElement.addEventListener('blur', () => {
+        // Disable contentEditable when focus is lost
+        textElement.contentEditable = 'false';
+        
+        // Change cursor back to move
+        textElement.style.cursor = 'move';
+      });
+
       // Add focus handler to ensure selected state is maintained when editing
       textElement.addEventListener('focus', () => {
         // Set this element as the selected text
@@ -533,15 +665,20 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Add visual selection indicator
         textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
         
+        // Show resize handles
+        toggleResizeHandles(true);
+        
         // Notify parent component of text selection
         handleTextSelectionChange(true);
       });
-      
+
+      // Add to the container
       containerRef.current?.appendChild(textElement);
-      
+
       // Set as selected text immediately
       selectedTextRef.current = textElement;
       textElement.style.boxShadow = '0 0 0 2px rgba(0, 123, 255, 0.5)';
+      toggleResizeHandles(true); // Show resize handles initially
       handleTextSelectionChange(true);
       
       // Add to canvas
@@ -942,33 +1079,54 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     }
   };
   
-  // Update text element event listeners:
-  
-  // Modify the document click handler
+  // Modify the document click handler to hide resize handles
   useEffect(() => {
     const handleDocumentClick = (e: MouseEvent) => {
       // Check if click is outside text elements
       if (containerRef.current && e.target instanceof Node) {
         // Skip if clicking inside text element or on an element with the data-text-controls attribute
-        // This attribute will be added to the toolbar's text styling controls
         let targetElement: Element | null = e.target instanceof Element ? e.target : null;
+        let isTextElement = false;
+        let isTextControl = false;
+        let isResizeHandle = false;
+        
         while (targetElement) {
-          if (targetElement.hasAttribute('data-text-id') || 
-              targetElement.hasAttribute('data-text-controls')) {
-            // Click is on a text element or text controls, don't deselect
-            return;
+          if (targetElement.hasAttribute('data-text-id')) {
+            isTextElement = true;
+            break;
+          }
+          if (targetElement.hasAttribute('data-text-controls')) {
+            isTextControl = true;
+            break;
+          }
+          if (targetElement.classList && targetElement.classList.contains('resize-handle')) {
+            isResizeHandle = true;
+            break;
           }
           targetElement = targetElement.parentElement;
+        }
+        
+        // If clicking on a text element, text control, or resize handle, don't deselect
+        if (isTextElement || isTextControl || isResizeHandle) {
+          return;
         }
         
         // Clear selected text reference
         selectedTextRef.current = null;
         
-        // Remove selection styling from all text elements
+        // Remove selection styling and hide resize handles from all text elements
         const allTextElements = containerRef.current.querySelectorAll('[data-text-id]');
         allTextElements.forEach((el) => {
           if (el instanceof HTMLElement) {
             el.style.boxShadow = 'none';
+            
+            // Hide resize handles
+            const handles = el.querySelectorAll('.resize-handle');
+            handles.forEach(handle => {
+              if (handle instanceof HTMLElement) {
+                handle.style.display = 'none';
+              }
+            });
           }
         });
         
