@@ -3,3 +3,4 @@
 __pycache__/
 ai-services/models/inpainting/anime-manga-big-lama.pt
 .env
+.cursor/

@@ -9,35 +9,9 @@ import type { Translation } from './components/TranslationPanel';
 // Get API URL from environment variables
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// Available font options
-export const FONT_OPTIONS = [
-  { value: 'Arial', label: 'Arial' },
-  { value: 'Times New Roman', label: 'Times New Roman' },
-  { value: 'Courier New', label: 'Courier New' },
-  { value: 'Georgia', label: 'Georgia' },
-  { value: 'Verdana', label: 'Verdana' },
-  { value: 'Comic Sans MS', label: 'Comic Sans MS' },
-  { value: 'Impact', label: 'Impact' },
-  { value: 'Tahoma', label: 'Tahoma' }
-];
-
-// Available font size options
-export const FONT_SIZE_OPTIONS = [
-  { value: 12, label: '12px' },
-  { value: 14, label: '14px' },
-  { value: 16, label: '16px' },
-  { value: 18, label: '18px' },
-  { value: 20, label: '20px' },
-  { value: 24, label: '24px' },
-  { value: 28, label: '28px' },
-  { value: 32, label: '32px' },
-  { value: 36, label: '36px' },
-  { value: 48, label: '48px' }
-];
-
 function App() {
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
-  const [currentTool, setCurrentTool] = useState<string>('mask');
+  const [currentTool, setCurrentTool] = useState<string>('pointer');
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
   const [isInpainting, setIsInpainting] = useState<boolean>(false);
@@ -47,12 +21,6 @@ function App() {
   const [hasSelections, setHasSelections] = useState<boolean>(false);
   const [showTranslationsPanel, setShowTranslationsPanel] = useState<boolean>(false);
   const [translations, setTranslations] = useState<Translation[]>([]);
-  
-  // Text styling options
-  const [textFont, setTextFont] = useState<string>('Arial');
-  const [textSize, setTextSize] = useState<number>(18);
-  const [textColor, setTextColor] = useState<string>('#000000');
-  const [showTextOptions, setShowTextOptions] = useState<boolean>(false);
   
   // Create a ref for the CanvasEditor component
   const canvasEditorRef = useRef<CanvasEditorRef>(null);
@@ -256,6 +224,11 @@ function App() {
       setTranslations(translationsWithBounds);
       setShowTranslationsPanel(true);
       
+      // After setting state to show panel, update text positions
+      setTimeout(() => {
+        canvasEditorRef.current?.updateTextPositions?.();
+      }, 100); // Small delay to allow layout to update
+      
       setSnackbarMessage("Translation completed successfully!");
       setAlertType('success');
       setSnackbarOpen(true);
@@ -316,83 +289,43 @@ function App() {
     if (canvasEditorRef.current) {
       canvasEditorRef.current.addTextToCanvas({
         ...translation,
-        // Pass text styling options to the canvas editor
+        // Set default styling
         textStyle: {
-          fontFamily: textFont,
-          fontSize: textSize,
-          color: textColor
+          fontFamily: 'Arial',
+          fontSize: 18,
+          color: '#000000'
         }
       });
       
-      // Show text styling options after adding text
-      setShowTextOptions(true);
-      
-      // Set tool to selection mode to allow easier interaction with the added text
-      setCurrentTool('selection');
+      // Set tool to 'pointer' to allow interacting with the text without drawing selections
+      setCurrentTool('pointer');
     }
   };
   
-  // Text styling handlers
-  const handleTextFontChange = (font: string) => {
-    setTextFont(font);
-    // Apply to selected text if any
-    if (canvasEditorRef.current) {
-      canvasEditorRef.current.updateSelectedTextStyle?.({ fontFamily: font });
-    }
-  };
-
-  const handleTextSizeChange = (size: number) => {
-    setTextSize(size);
-    // Apply to selected text if any
-    if (canvasEditorRef.current) {
-      canvasEditorRef.current.updateSelectedTextStyle?.({ fontSize: size });
-    }
-  };
-
-  const handleTextColorChange = (color: string) => {
-    setTextColor(color);
-    // Apply to selected text if any
-    if (canvasEditorRef.current) {
-      canvasEditorRef.current.updateSelectedTextStyle?.({ color });
-    }
-  };
-
   // Update current tool to show or hide text options
   const handleToolChange = (tool: string) => {
     setCurrentTool(tool);
-    
-    // Show text options when using the text tool
-    if (tool === 'text') {
-      setShowTextOptions(true);
-    } else if (tool === 'mask' || tool === 'selection') {
-      // Hide text options when switching to other tools
-      // Text selection handler will show them again if a text is selected
-      setShowTextOptions(false);
-    }
   };
   
   // Handle closing the translations panel
   const handleCloseTranslationsPanel = () => {
     setShowTranslationsPanel(false);
+    
+    // Update text positions after panel closes
+    // This is necessary because the layout changes can affect positioning
+    setTimeout(() => {
+      canvasEditorRef.current?.updateTextPositions?.();
+    }, 100); // Small delay to allow layout to update
   };
   
   const handleSnackbarClose = () => {
     setSnackbarOpen(false);
   };
 
-  // Update handleTextSelection to prevent losing selection when interacting with controls
+  // Update handleTextSelection to remove text options
   const handleTextSelection = (isTextSelected: boolean) => {
-    // Show text styling options when text is selected, regardless of current tool
-    if (isTextSelected) {
-      setShowTextOptions(true);
-    } else {
-      // Check directly with the canvas editor if text is really not selected
-      // This helps prevent the controls from disappearing when interacting with them
-      const textIsSelected = canvasEditorRef.current?.isTextSelected?.() || false;
-      if (!textIsSelected) {
-        setShowTextOptions(false);
-      }
-    }
+    // We've removed text styling options, so this function is simplified
+    // It may still be needed for other functionality, so we're keeping it minimal
   };
 
   return (
@@ -416,13 +349,6 @@ function App() {
                 isInpainting={isInpainting}
                 isTranslating={isTranslating}
                 hasSelections={hasSelections}
-                showTextOptions={showTextOptions}
-                textFont={textFont}
-                textSize={textSize}
-                textColor={textColor}
-                onTextFontChange={handleTextFontChange}
-                onTextSizeChange={handleTextSizeChange}
-                onTextColorChange={handleTextColorChange}
               />
               
               <div className="flex items-center">

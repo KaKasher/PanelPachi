@@ -1,5 +1,4 @@
 import { type FC } from 'react';
-import { FONT_OPTIONS, FONT_SIZE_OPTIONS } from '../App';
 
 interface ToolbarProps {
   currentTool: string;
@@ -10,14 +9,6 @@ interface ToolbarProps {
   isInpainting?: boolean;
   isTranslating?: boolean;
   hasSelections?: boolean;
-  // Text styling options
-  showTextOptions?: boolean;
-  textFont?: string;
-  textSize?: number;
-  textColor?: string;
-  onTextFontChange?: (font: string) => void;
-  onTextSizeChange?: (size: number) => void;
-  onTextColorChange?: (color: string) => void;
 }
 
 const Toolbar: FC<ToolbarProps> = ({ 
@@ -28,19 +19,28 @@ const Toolbar: FC<ToolbarProps> = ({
   onTranslateSelected,
   isInpainting = false,
   isTranslating = false,
-  hasSelections = false,
-  // Text styling options
-  showTextOptions = false,
-  textFont = 'Arial',
-  textSize = 18,
-  textColor = '#000000',
-  onTextFontChange,
-  onTextSizeChange,
-  onTextColorChange
+  hasSelections = false
 }) => {
   return (
     <div className="flex items-center gap-4 p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
       <span className="text-sm font-medium text-gray-700">Tools:</span>
+      
+      {/* Pointer Tool Button */}
+      <button
+        className={`
+          btn btn-sm 
+          ${currentTool === 'pointer' ? 'btn-primary' : 'btn-outline'}
+          flex items-center gap-1.5
+        `}
+        onClick={() => onToolChange('pointer')}
+        disabled={isInpainting || isTranslating}
+        title="Pointer Tool - Select and move text"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M6.672 1.911a1 1 0 10-1.932.518l.259.966a1 1 0 001.932-.518l-.26-.966zM2.429 4.74a1 1 0 10-.517 1.932l.966.259a1 1 0 00.517-1.932l-.966-.26zm8.814-.569a1 1 0 00-1.415-1.414l-.707.707a1 1 0 101.415 1.415l.707-.708zm-7.071 7.072l.707-.707A1 1 0 003.465 9.12l-.708.707a1 1 0 001.415 1.415zm3.2-5.171a1 1 0 00-1.3 1.3l4 10a1 1 0 001.823.075l1.38-2.759 3.018 3.02a1 1 0 001.414-1.415l-3.019-3.02 2.76-1.379a1 1 0 00-.076-1.822l-10-4z" clipRule="evenodd" />
+        </svg>
+        <span>Pointer</span>
+      </button>
       
       {/* Mask Tool Button */}
       <button
@@ -147,65 +147,10 @@ const Toolbar: FC<ToolbarProps> = ({
         <span>Undo</span>
       </button>
       
-      {/* Text Styling Controls (replaces tips) */}
-      {showTextOptions ? (
-        <div className="ml-auto flex items-center gap-3 bg-blue-50 px-3 py-1.5 rounded border border-blue-200 shadow-sm" data-text-controls="true">
-          <div className="flex items-center gap-1.5" data-text-controls="true">
-            <span className="text-xs font-semibold text-blue-700">Text Styling:</span>
-          </div>
-          
-          {/* Font Family Dropdown */}
-          <div className="flex items-center gap-1.5" data-text-controls="true">
-            <label htmlFor="font-family" className="text-xs text-gray-600">Font:</label>
-            <select 
-              id="font-family"
-              className="select select-xs bg-white border border-gray-300 max-w-[120px] hover:border-blue-400 focus:border-blue-500 focus:ring focus:ring-blue-200"
-              value={textFont}
-              onChange={(e) => onTextFontChange?.(e.target.value)}
-              data-text-controls="true"
-            >
-              {FONT_OPTIONS.map((font) => (
-                <option key={font.value} value={font.value} data-text-controls="true">{font.label}</option>
-              ))}
-            </select>
-          </div>
-          
-          {/* Font Size Dropdown */}
-          <div className="flex items-center gap-1.5" data-text-controls="true">
-            <label htmlFor="font-size" className="text-xs text-gray-600">Size:</label>
-            <select 
-              id="font-size"
-              className="select select-xs bg-white border border-gray-300 max-w-[80px] hover:border-blue-400 focus:border-blue-500 focus:ring focus:ring-blue-200"
-              value={textSize}
-              onChange={(e) => onTextSizeChange?.(Number(e.target.value))}
-              data-text-controls="true"
-            >
-              {FONT_SIZE_OPTIONS.map((size) => (
-                <option key={size.value} value={size.value} data-text-controls="true">{size.label}</option>
-              ))}
-            </select>
-          </div>
-          
-          {/* Color Picker */}
-          <div className="flex items-center gap-1.5" data-text-controls="true">
-            <label htmlFor="text-color" className="text-xs text-gray-600">Color:</label>
-            <div className="relative" data-text-controls="true">
-              <input 
-                type="color" 
-                id="text-color"
-                className="w-6 h-6 rounded cursor-pointer border border-gray-300 hover:border-blue-400" 
-                value={textColor}
-                onChange={(e) => onTextColorChange?.(e.target.value)}
-                data-text-controls="true"
-              />
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="ml-auto text-xs px-3 py-1.5 bg-gray-50 text-gray-500 rounded border border-gray-200">
-          <span className="text-primary-600 font-semibold">Tip:</span> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
-        </div>
-      )}
+      {/* Tips */}
+      <div className="ml-auto text-xs px-3 py-1.5 bg-gray-50 text-gray-500 rounded border border-gray-200">
+        <span className="text-primary-600 font-semibold">Tip:</span> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
+      </div>
     </div>
   );
 };

@@ -33,6 +33,7 @@ declare module 'fabric' {
     getZoom(): number;
     setViewportTransform(transform: number[]): void;
     getPointer(e: { clientX: number, clientY: number }): { x: number, y: number };
+    setActiveObject(object: any): Canvas;
   }
 
   export class BaseBrush {
@@ -73,10 +74,34 @@ declare module 'fabric' {
     strokeWidth?: number;
     setCoords(): void;
     set(properties: any): Object;
+    on(event: string, callback: Function): void;
   }
 
   export class Rect extends Object {
     constructor(options?: any);
     absolutePositioned: boolean;
+  }
+  
+  export class Text extends Object {
+    constructor(text: string, options?: any);
+    text: string;
+    fontFamily: string;
+    fontSize: number;
+    fontWeight: string;
+    textAlign: string;
+    fill: string;
+    set(properties: any): Text;
+  }
+  
+  export class Group extends Object {
+    constructor(objects: Object[], options?: any);
+    _objects: Object[];
+    set(properties: any): Group;
+  }
+
+  export namespace fabric {
+    const Rect: typeof import('fabric').Rect;
+    const Text: typeof import('fabric').Text;  
+    const Group: typeof import('fabric').Group;
   }
 } 
