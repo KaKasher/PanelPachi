@@ -1,3 +1,12 @@
+/* Import SF Toontime font */
+@font-face {
+  font-family: 'SF Toontime';
+  src: url('./fonts/SF_Toontime.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

@@ -56,6 +56,27 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   const [isInpainting, setIsInpainting] = useState<boolean>(false);
   const isInpaintingRef = useRef<boolean>(false);
   
+  // Add font loading state
+  const [fontLoaded, setFontLoaded] = useState<boolean>(false);
+  
+  // Load the custom font before rendering
+  useEffect(() => {
+    // Create a FontFace object to load the font
+    const customFont = new FontFace('SF Toontime', 'url(./fonts/SF_Toontime.ttf)');
+    
+    // Load the font
+    customFont.load().then((loadedFont) => {
+      // Add the font to the document
+      document.fonts.add(loadedFont);
+      setFontLoaded(true);
+      console.log('SF Toontime font loaded successfully');
+    }).catch((error) => {
+      console.error('Failed to load SF Toontime font:', error);
+      // Set font loaded to true anyway so the app doesn't hang
+      setFontLoaded(true);
+    });
+  }, []);
+  
   // Store original image dimensions for export
   const originalImageDimensionsRef = useRef<{ width: number, height: number } | null>(null);
   
@@ -181,6 +202,32 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     try {
       // Show loading status
       setLoadingStatus(translation.useInpainting ? "Inpainting text area..." : "Adding text to image...");
+      
+      // Ensure the font is loaded
+      if (!fontLoaded) {
+        setLoadingStatus("Loading font...");
+        // Wait for the font to load with a timeout
+        await new Promise<void>((resolve) => {
+          const checkFont = () => {
+            if (document.fonts.check('12px "SF Toontime"')) {
+              resolve();
+            } else {
+              setTimeout(checkFont, 100);
+            }
+          };
+          
+          // Set a max timeout of 3 seconds
+          const timeout = setTimeout(() => {
+            console.warn('Font loading timed out, proceeding anyway');
+            resolve();
+          }, 3000);
+          
+          checkFont();
+          
+          // Clear timeout if resolved
+          return () => clearTimeout(timeout);
+        });
+      }
       
       // Get the background image (first object) to calculate the transformation
       const objects = canvas.getObjects();
@@ -379,7 +426,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             top: canvasTop,
             width: canvasWidth,
             fontSize: fontSize,
-            fontFamily: translation.textStyle?.fontFamily || 'Arial',
+            fontFamily: translation.textStyle?.fontFamily || 'SF Toontime',
             fill: translation.textStyle?.color || 'black',
             textAlign: 'center',
             originX: 'left', // Changed to left for proper width alignment
@@ -465,7 +512,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             top: canvasTop,
             width: canvasWidth,
             fontSize: fontSize,
-            fontFamily: translation.textStyle?.fontFamily || 'Arial',
+            fontFamily: translation.textStyle?.fontFamily || 'SF Toontime',
             fill: translation.textStyle?.color || 'black',
             textAlign: 'center',
             originX: 'left', // Changed to left for proper width alignment
@@ -536,7 +583,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           top: canvasTop,
           width: canvasWidth,
           fontSize: fontSize,
-          fontFamily: translation.textStyle?.fontFamily || 'Arial',
+          fontFamily: translation.textStyle?.fontFamily || 'SF Toontime',
           fill: translation.textStyle?.color || 'black',
           textAlign: 'center',
           originX: 'left', // Changed to left for proper width alignment

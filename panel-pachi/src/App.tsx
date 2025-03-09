@@ -291,7 +291,7 @@ function App() {
         ...translation,
         // Set default styling
         textStyle: {
-          fontFamily: 'Arial',
+          fontFamily: 'SF Toontime',
           fontSize: 18,
           color: '#000000'
         }
