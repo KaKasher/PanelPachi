@@ -34,6 +34,8 @@ declare module 'fabric' {
     setViewportTransform(transform: number[]): void;
     getPointer(e: { clientX: number, clientY: number }): { x: number, y: number };
     setActiveObject(object: any): Canvas;
+    sendToBack(object: any): Canvas;
+    bringToFront(object: any): Canvas;
   }
 
   export class BaseBrush {
@@ -97,6 +99,22 @@ declare module 'fabric' {
     constructor(objects: Object[], options?: any);
     _objects: Object[];
     set(properties: any): Group;
+  }
+
+  export class Textbox extends Text {
+    width: number;
+    height: number;
+    splitByGrapheme: boolean;
+    lineHeight: number;
+    charSpacing: number;
+    minWidth: number;
+    editingBorderColor: string;
+    cursorWidth: number;
+    cursorDuration: number;
+    cursorDelay: number;
+    enterEditing(): void;
+    exitEditing(): void;
+    isEditing: boolean;
   }
 
   export namespace fabric {

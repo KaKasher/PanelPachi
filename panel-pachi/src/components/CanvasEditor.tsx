@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
-import { Canvas, Image as FabricImage, PencilBrush, Rect, Text } from 'fabric';
+import { Canvas, Image as FabricImage, PencilBrush, Rect, Text, Textbox } from 'fabric';
 import { Translation } from './TranslationPanel';
 
 // Need to import fabric globally for access to Text objects
@@ -334,10 +334,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           const inpaintedBlob = await fetch(inpaintedImageUrl).then(r => r.blob());
           currentImageBlobRef.current = inpaintedBlob;
           
+          // Save current canvas objects except background image and mask paths
+          const objectsToPreserve = canvas.getObjects().filter(obj => 
+            !(obj instanceof FabricImage) && // Not a background image
+            !(obj.type === 'path') // Not a mask path
+          );
+          
           // Clear the canvas
           canvas.clear();
           
-          // Add the new image to the canvas
+          // Add the new image to the canvas first (will be at the bottom of the stack)
           const fabricImg = new FabricImage(inpaintedImg);
           
           // Calculate scaling to fit in canvas
@@ -350,14 +356,78 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           
           fabricImg.scale(scaleFactor);
           
-          // Center the image
+          // Add image to canvas
+          canvas.add(fabricImg);
           canvas.centerObject(fabricImg);
+          
+          // Make the image non-interactive
           fabricImg.selectable = false;
           fabricImg.evented = false;
           
-          // Add to canvas
-          canvas.add(fabricImg);
+          // Restore previously saved objects (they will be on top of the background)
+          objectsToPreserve.forEach(obj => {
+            canvas.add(obj);
+          });
+          
+          // Create and add the translated text
+          const fontSize = translation.textStyle?.fontSize || 
+            Math.min(Math.max(10, canvasWidth * 0.05), Math.min(canvasWidth * 0.2, canvasHeight * 0.2));
+          
+          // Use Textbox instead of Text for better text wrapping
+          const text = new Textbox(translation.translated, {
+            left: canvasLeft,
+            top: canvasTop,
+            width: canvasWidth,
+            fontSize: fontSize,
+            fontFamily: translation.textStyle?.fontFamily || 'Arial',
+            fill: translation.textStyle?.color || 'black',
+            textAlign: 'center',
+            originX: 'left', // Changed to left for proper width alignment
+            originY: 'top',  // Changed to top for proper height alignment
+            selectable: true,
+            hasControls: true,
+            lockScalingX: false,
+            lockScalingY: false,
+            splitByGrapheme: false,
+            editable: true  // Allow editing
+          });
+          
+          // Store relative position data on the text for resizing and positioning
+          text.set({ 
+            relativePosition: {
+              leftRatio: translation.bounds.left / originalDimensions.width,
+              topRatio: translation.bounds.top / originalDimensions.height,
+              widthRatio: translation.bounds.width / originalDimensions.width,
+              heightRatio: translation.bounds.height / originalDimensions.height,
+              fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
+              originalFontSize: fontSize // Store the original font size
+            }
+          });
+          
+          // Add the text to the canvas
+          canvas.add(text);
+          
+          // Add to history stack for undo
+          historyStackRef.current.push({
+            type: 'selection',
+            data: {
+              fabricObject: text
+            }
+          });
+          
+          // Render the canvas with all updates
           canvas.renderAll();
+          
+          // Update status message
+          setLoadingStatus("Text added successfully");
+          setTimeout(() => {
+            setLoadingStatus((currentStatus) => {
+              if (currentStatus === "Text added successfully" || currentStatus === "Inpainting text area...") {
+                return "";
+              }
+              return currentStatus;
+            });
+          }, 1500);
           
           // Clean up
           URL.revokeObjectURL(inpaintedImageUrl);
@@ -388,17 +458,24 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           // Create a text object for the translated text
           const fontSize = translation.textStyle?.fontSize || 
             Math.min(Math.max(10, canvasWidth * 0.05), Math.min(canvasWidth * 0.2, canvasHeight * 0.2));
-          const text = new Text(translation.translated, {
-            left: canvasLeft + canvasWidth / 2,
-            top: canvasTop + canvasHeight / 2,
+          
+          // Use Textbox instead of Text for better text wrapping
+          const text = new Textbox(translation.translated, {
+            left: canvasLeft,
+            top: canvasTop,
+            width: canvasWidth,
             fontSize: fontSize,
             fontFamily: translation.textStyle?.fontFamily || 'Arial',
             fill: translation.textStyle?.color || 'black',
             textAlign: 'center',
-            originX: 'center',
-            originY: 'center',
+            originX: 'left', // Changed to left for proper width alignment
+            originY: 'top',  // Changed to top for proper height alignment
             selectable: true,
-            hasControls: true
+            hasControls: true,
+            lockScalingX: false,
+            lockScalingY: false,
+            splitByGrapheme: false,
+            editable: true  // Allow editing
           });
           
           // Store relative position data on the text for resizing and positioning
@@ -408,9 +485,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
               topRatio: translation.bounds.top / originalDimensions.height,
               widthRatio: translation.bounds.width / originalDimensions.width,
               heightRatio: translation.bounds.height / originalDimensions.height,
-              fontSizeRatio: fontSize / Math.min(canvasWidth, canvasHeight), // Relative to dimensions
-              originalFontSize: fontSize, // Store the original font size
-              originalBounds: { ...translation.bounds }
+              fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
+              originalFontSize: fontSize // Store the original font size
             }
           });
           
@@ -453,17 +529,24 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Create a text object for the translated text
         const fontSize = translation.textStyle?.fontSize || 
           Math.min(Math.max(10, canvasWidth * 0.05), Math.min(canvasWidth * 0.2, canvasHeight * 0.2));
-        const text = new Text(translation.translated, {
-          left: canvasLeft + canvasWidth / 2,
-          top: canvasTop + canvasHeight / 2,
+        
+        // Use Textbox instead of Text for better text wrapping
+        const text = new Textbox(translation.translated, {
+          left: canvasLeft,
+          top: canvasTop,
+          width: canvasWidth,
           fontSize: fontSize,
           fontFamily: translation.textStyle?.fontFamily || 'Arial',
           fill: translation.textStyle?.color || 'black',
           textAlign: 'center',
-          originX: 'center',
-          originY: 'center',
+          originX: 'left', // Changed to left for proper width alignment
+          originY: 'top',  // Changed to top for proper height alignment
           selectable: true,
-          hasControls: true
+          hasControls: true,
+          lockScalingX: false,
+          lockScalingY: false,
+          splitByGrapheme: false,
+          editable: true  // Allow editing
         });
         
         // Store relative position data on the text for resizing and positioning
@@ -473,9 +556,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             topRatio: translation.bounds.top / originalDimensions.height,
             widthRatio: translation.bounds.width / originalDimensions.width,
             heightRatio: translation.bounds.height / originalDimensions.height,
-            fontSizeRatio: fontSize / Math.min(canvasWidth, canvasHeight), // Relative to dimensions
-            originalFontSize: fontSize, // Store the original font size
-            originalBounds: { ...translation.bounds }
+            fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
+            originalFontSize: fontSize // Store the original font size
           }
         });
         
@@ -1149,24 +1231,29 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
               height: img.height
             };
             
+            // Save current canvas objects except background image and mask paths
+            const objectsToPreserve = canvas.getObjects().filter(obj => 
+              !(obj instanceof FabricImage) && // Not a background image
+              !(obj.type === 'path') // Not a mask path
+            );
+            
             // Clear the canvas
             canvas.clear();
             
             // Create a Fabric image from the inpainted image
             const fabricImg = new FabricImage(img);
             
-            // Get the canvas dimensions
-            const canvasWidth = canvas.getWidth();
-            const canvasHeight = canvas.getHeight();
+            // Calculate scaling to fit in canvas
+            const canvasContainerWidth = canvas.getWidth();
+            const canvasContainerHeight = canvas.getHeight();
+            const scaleFactor = Math.min(
+              canvasContainerWidth / img.width,
+              canvasContainerHeight / img.height
+            ) * 0.95; // 95% to leave some margin
             
-            // Calculate scaling to fit the image in the canvas
-            const scaleX = canvasWidth / img.width;
-            const scaleY = canvasHeight / img.height;
-            const scale = Math.min(scaleX, scaleY);
+            fabricImg.scale(scaleFactor);
             
-            fabricImg.scale(scale);
-            
-            // Center the image on the canvas
+            // Add image to canvas
             canvas.add(fabricImg);
             canvas.centerObject(fabricImg);
             
@@ -1174,32 +1261,17 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             fabricImg.selectable = false;
             fabricImg.evented = false;
             
-            // Clear the history stack when adding a new image
-            historyStackRef.current = [];
-            
-            // Reset zoom level
-            zoomRef.current = 1;
-            canvas.setZoom(1);
-            canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
-            
-            // Re-initialize drawing mode if in mask mode
-            if (tool === 'mask') {
-              canvas.isDrawingMode = true;
-              if (canvas.freeDrawingBrush) {
-                canvas.freeDrawingBrush.color = 'rgba(236, 72, 153, 0.5)'; // Pink color (#EC4899) with transparency
-                canvas.freeDrawingBrush.width = brushSizeRef.current;
-                
-                // Update cursor
-                updateBrushCursor(brushSizeRef.current);
-              }
-            }
+            // Restore previously saved objects (they will be on top of the background)
+            objectsToPreserve.forEach(obj => {
+              canvas.add(obj);
+            });
             
             canvas.renderAll();
             
             setLoadingStatus("Inpainting complete");
             setIsInpainting(false);
             isInpaintingRef.current = false;
-
+            
             // Clear the message after a brief delay
             setTimeout(() => {
               setLoadingStatus((currentStatus) => {
@@ -1212,12 +1284,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             
             // Clean up the URL
             URL.revokeObjectURL(inpaintedImageUrl);
-            
-            // After the inpainting is complete, clear the drawn paths from the canvas
-            // Find and remove all path objects from the canvas
-            const pathObjects = canvas.getObjects().filter(obj => obj.type === 'path');
-            pathObjects.forEach(obj => canvas.remove(obj));
-            canvas.renderAll();
             
             resolve();
           };
@@ -1889,10 +1955,21 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     // Mouse up event handler for selection tool
     canvas.on('mouse:up', handleSelectionEnd);
     
+    // Double-click handler for text editing
+    const handleDoubleClick = (e: any) => {
+      if (e.target && (e.target instanceof Textbox) && e.target.editable) {
+        // Enter editing mode for the textbox
+        e.target.enterEditing();
+        canvas.setActiveObject(e.target);
+      }
+    };
+    
+    canvas.on('mouse:dblclick', handleDoubleClick);
+    
     // Add canvas mouse:down event handler to track text selection
     const handleObjectSelected = (e: any) => {
       // Check if selected object is a text
-      if (e.target instanceof Text) {
+      if (e.target && (e.target instanceof Text || e.target instanceof Textbox)) {
         // Store the text object in the ref
         selectedTextRef.current = e.target;
         // Notify the parent component that a text is selected
@@ -1919,6 +1996,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       canvas.off('mouse:down', handleSelectionStart);
       canvas.off('mouse:move', handleSelectionMove);
       canvas.off('mouse:up', handleSelectionEnd);
+      canvas.off('mouse:dblclick', handleDoubleClick);
       canvas.off('selection:created', handleObjectSelected);
       canvas.off('selection:updated', handleObjectSelected);
       canvas.off('selection:cleared', () => {});
@@ -1968,52 +2046,34 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           scaleX: 1,
           scaleY: 1
         });
-      } else if (obj instanceof Text) {
-        // This is a text object
-        const rectObj = relativePosition.rect;
-        if (!rectObj) return;
+      } else if (obj instanceof Text || obj instanceof Textbox) {
+        // Handle both regular Text and Textbox objects
+        const { leftRatio, topRatio, widthRatio, heightRatio } = relativePosition;
         
-        // Make sure the rect is valid and exists in the canvas
-        if (!(rectObj instanceof Rect)) return;
+        // Calculate new position based on the image
+        const newLeft = imgLeft + (leftRatio * imgWidth * imgScaleX);
+        const newTop = imgTop + (topRatio * imgHeight * imgScaleY);
+        const newWidth = widthRatio * imgWidth * imgScaleX;
         
-        // Check if the rect is still in the canvas
-        const isRectInCanvas = canvas.getObjects().includes(rectObj);
-        if (!isRectInCanvas) return;
+        // Calculate new font size based on dimensions
+        const fontSize = relativePosition.originalFontSize || 16;
+        const fontSizeRatio = relativePosition.fontSizeRatio || 0.1;
+        const newFontSize = Math.max(12, Math.min(newWidth * fontSizeRatio, 36));
         
-        // Get the new position of its rectangle
-        const rectLeft = rectObj.left || 0;
-        const rectTop = rectObj.top || 0;
-        const rectScaleX = (rectObj as any).scaleX || 1;
-        const rectScaleY = (rectObj as any).scaleY || 1;
-        const rectWidth = (rectObj.width || 1) * rectScaleX;
-        const rectHeight = (rectObj.height || 1) * rectScaleY;
-        
-        // Calculate new position based on the rectangle
-        const newLeft = rectLeft + (relativePosition.centerXRatio * rectWidth);
-        const newTop = rectTop + (relativePosition.centerYRatio * rectHeight);
-        
-        // Calculate new font size based on rectangle dimensions and the original image scale
-        const rectSize = Math.min(rectWidth, rectHeight);
-        
-        // Use a more stable scaling approach that doesn't shrink text too much on resize
-        // We'll use the original font size and apply a modest scaling factor based on rectangle size changes
-        const originalRectWidth = relativePosition.originalRectWidth || rectWidth;
-        const originalRectHeight = relativePosition.originalRectHeight || rectHeight;
-        const rectSizeRatio = rectSize / Math.min(originalRectWidth, originalRectHeight);
-        
-        // Apply a dampened scaling - don't scale down as aggressively
-        const scalingFactor = rectSizeRatio < 1 ? 
-          0.7 + 0.3 * rectSizeRatio : // When shrinking, only scale down partially
-          rectSizeRatio; // When growing, scale normally
-        
-        const newFontSize = relativePosition.originalFontSize * scalingFactor;
-        
-        // Update the text
-        obj.set({
+        // Update the text positioning
+        const updates: any = {
           left: newLeft,
           top: newTop,
-          fontSize: Math.max(12, Math.min(newFontSize, rectSize * 0.8)) // Minimum 12px for readability
-        });
+          fontSize: newFontSize
+        };
+        
+        // If it's a Textbox, update the width as well
+        if (obj instanceof Textbox) {
+          updates.width = newWidth;
+        }
+        
+        // Apply all updates
+        obj.set(updates);
       }
     });
     
