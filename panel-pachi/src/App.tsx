@@ -22,6 +22,12 @@ function App() {
   const [showTranslationsPanel, setShowTranslationsPanel] = useState<boolean>(false);
   const [translations, setTranslations] = useState<Translation[]>([]);
   
+  // Add state for snackbar exit animation
+  const [isSnackbarExiting, setIsSnackbarExiting] = useState<boolean>(false);
+  
+  // Create a ref for tracking snackbar auto-dismiss timer
+  const snackbarTimerRef = useRef<number | null>(null);
+  
   // Create a ref for the CanvasEditor component
   const canvasEditorRef = useRef<CanvasEditorRef>(null);
 
@@ -39,17 +45,8 @@ function App() {
         clearTimeout(timeoutId);
         const isConnected = !!response && response.ok;
         setApiConnected(isConnected);
-        
-        if (!isConnected) {
-          setSnackbarMessage("Warning: Cannot connect to the backend API. You can still edit images, but inpainting will not work. Make sure the API server is running.");
-          setAlertType('error');
-          setSnackbarOpen(true);
-        }
       } catch (error) {
         setApiConnected(false);
-        setSnackbarMessage("Warning: Cannot connect to the backend API. You can still edit images, but inpainting will not work. Make sure the API server is running.");
-        setAlertType('error');
-        setSnackbarOpen(true);
       }
     };
     
@@ -58,7 +55,9 @@ function App() {
     // Retry connecting to API every 30 seconds
     const intervalId = setInterval(checkApiConnectivity, 30000);
     
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+    };
   }, []);
 
   // Ensure the app takes up the full viewport and prevents scrolling
@@ -101,27 +100,71 @@ function App() {
   // Handle export mask functionality
   const handleExportMask = () => {
     if (!apiConnected) {
-      setSnackbarMessage("Cannot inpaint: The backend API is not connected. Please start the API server and try again.");
-      setAlertType('error');
-      setSnackbarOpen(true);
       return;
     }
     
+    setIsInpainting(true);
     if (canvasEditorRef.current && typeof canvasEditorRef.current.exportMask === 'function') {
-      setIsInpainting(true);
       canvasEditorRef.current.exportMask()
         .then(() => {
+          setIsInpainting(false);
           setSnackbarMessage("Inpainting completed successfully!");
           setAlertType('success');
           setSnackbarOpen(true);
-          setIsInpainting(false);
         })
-        .catch((error: any) => {
+        .catch((error) => {
+          setIsInpainting(false);
           setSnackbarMessage(`Inpainting failed: ${error.message || 'Unknown error'}`);
           setAlertType('error');
           setSnackbarOpen(true);
-          setIsInpainting(false);
         });
+    }
+  };
+  
+  // Handle saving the edited image
+  const handleSaveImage = async () => {
+    if (!canvasEditorRef.current || !uploadedImage) return;
+    
+    try {
+      const blob = await canvasEditorRef.current.exportImage();
+      
+      if (!blob) {
+        setSnackbarMessage("Failed to export image");
+        setAlertType('error');
+        setSnackbarOpen(true);
+        return;
+      }
+      
+      // Create a download link for the blob
+      const url = URL.createObjectURL(blob);
+      
+      // Create a filename based on the original image name
+      const originalName = uploadedImage.name;
+      const extension = originalName.substring(originalName.lastIndexOf('.'));
+      const baseName = originalName.substring(0, originalName.lastIndexOf('.'));
+      const newFilename = `${baseName}_edited.png`; // Always save as PNG
+      
+      // Create a download link
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = newFilename;
+      
+      // Append to body, click, and then remove
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      // Clean up the URL
+      URL.revokeObjectURL(url);
+      
+      setSnackbarMessage("Image saved successfully");
+      setAlertType('success');
+      setSnackbarOpen(true);
+    } catch (error) {
+      console.error("Error saving image:", error);
+      setSnackbarMessage(`Error saving image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setAlertType('error');
+      setSnackbarOpen(true);
     }
   };
   
@@ -135,9 +178,6 @@ function App() {
   // Handle translate selected functionality
   const handleTranslateSelected = async () => {
     if (!apiConnected || !canvasEditorRef.current) {
-      setSnackbarMessage("Cannot translate: The backend API is not connected. Please start the API server and try again.");
-      setAlertType('error');
-      setSnackbarOpen(true);
       return;
     }
 
@@ -319,7 +359,14 @@ function App() {
   };
   
   const handleSnackbarClose = () => {
-    setSnackbarOpen(false);
+    // Start exit animation
+    setIsSnackbarExiting(true);
+    
+    // Wait for animation to complete before removing from DOM
+    setTimeout(() => {
+      setSnackbarOpen(false);
+      setIsSnackbarExiting(false);
+    }, 300); // Match this with animation duration in tailwind config
   };
 
   // Update handleTextSelection to remove text options
@@ -327,6 +374,38 @@ function App() {
     // We've removed text styling options, so this function is simplified
     // It may still be needed for other functionality, so we're keeping it minimal
   };
+
+  // Auto-dismiss snackbar after a timeout
+  useEffect(() => {
+    if (snackbarOpen && !isSnackbarExiting) {
+      // Clear any existing timer
+      if (snackbarTimerRef.current !== null) {
+        clearTimeout(snackbarTimerRef.current);
+      }
+      
+      // Set a new timer to close the snackbar after 5 seconds
+      snackbarTimerRef.current = window.setTimeout(() => {
+        // Start exit animation
+        setIsSnackbarExiting(true);
+        
+        // Wait for animation to complete before removing from DOM
+        setTimeout(() => {
+          setSnackbarOpen(false);
+          setIsSnackbarExiting(false);
+        }, 300); // Match this with animation duration in tailwind config
+        
+        snackbarTimerRef.current = null;
+      }, 5000); // 5 seconds
+    }
+    
+    // Cleanup function to clear the timer when component unmounts or snackbar closes
+    return () => {
+      if (snackbarTimerRef.current !== null) {
+        clearTimeout(snackbarTimerRef.current);
+        snackbarTimerRef.current = null;
+      }
+    };
+  }, [snackbarOpen, snackbarMessage, isSnackbarExiting]);
 
   return (
     <div className="h-screen max-h-screen flex flex-col text-gray-800 overflow-hidden">
@@ -344,6 +423,7 @@ function App() {
                 currentTool={currentTool} 
                 onToolChange={handleToolChange}
                 onExportMask={apiConnected ? handleExportMask : undefined}
+                onSaveImage={handleSaveImage}
                 onUndo={handleUndo}
                 onTranslateSelected={apiConnected ? handleTranslateSelected : undefined}
                 isInpainting={isInpainting}
@@ -355,6 +435,17 @@ function App() {
                 <div className="text-xs text-gray-500 mr-3">
                   {uploadedImage.name} ({Math.round(uploadedImage.size / 1024)} KB)
                 </div>
+                
+                <button
+                  className="btn btn-sm btn-outline flex items-center gap-1.5 mr-2"
+                  onClick={handleSaveImage}
+                  disabled={isInpainting || isTranslating}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z" />
+                  </svg>
+                  <span>Save Image</span>
+                </button>
                 
                 <button
                   className="btn btn-sm btn-outline flex items-center gap-1.5"
@@ -426,6 +517,7 @@ function App() {
           ${alertType === 'success' ? 'bg-green-50 text-green-600 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}
           px-4 py-3 rounded-lg border shadow-lg
           flex items-center gap-2 min-w-[300px] max-w-md
+          ${isSnackbarExiting ? 'animate-snackbar-out' : 'animate-snackbar-in'}
         `}>
           <div className={`w-5 h-5 rounded-full flex items-center justify-center ${alertType === 'success' ? 'bg-green-100' : 'bg-red-100'}`}>
             {alertType === 'success' ? (
@@ -441,7 +533,7 @@ function App() {
           <div className="flex-1">{snackbarMessage}</div>
           <button 
             onClick={handleSnackbarClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-400 hover:text-gray-600 transition-colors"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
