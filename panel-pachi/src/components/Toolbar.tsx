@@ -146,11 +146,6 @@ const Toolbar: FC<ToolbarProps> = ({
         </svg>
         <span>Undo</span>
       </button>
-      
-      {/* Tips */}
-      <div className="ml-auto text-xs px-3 py-1.5 bg-gray-50 text-gray-500 rounded border border-gray-200">
-        <span className="text-primary-600 font-semibold">Tip:</span> Scroll to adjust brush • Ctrl+Scroll to zoom • Ctrl+0 to reset • Space+drag to pan
-      </div>
     </div>
   );
 };
