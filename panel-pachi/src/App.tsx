@@ -351,6 +351,11 @@ function App() {
   const handleCloseTranslationsPanel = () => {
     setShowTranslationsPanel(false);
     
+    // Clear all selection boxes when the panel is closed
+    if (canvasEditorRef.current) {
+      canvasEditorRef.current.clearSelections();
+    }
+    
     // Update text positions after panel closes
     // This is necessary because the layout changes can affect positioning
     setTimeout(() => {

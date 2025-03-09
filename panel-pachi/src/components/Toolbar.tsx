@@ -6,6 +6,7 @@ interface ToolbarProps {
   onExportMask?: () => void;
   onUndo?: () => void;
   onTranslateSelected?: () => void;
+  onSaveImage?: () => void;
   isInpainting?: boolean;
   isTranslating?: boolean;
   hasSelections?: boolean;
@@ -17,6 +18,7 @@ const Toolbar: FC<ToolbarProps> = ({
   onExportMask, 
   onUndo,
   onTranslateSelected,
+  onSaveImage,
   isInpainting = false,
   isTranslating = false,
   hasSelections = false
