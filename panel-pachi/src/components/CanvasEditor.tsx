@@ -1812,6 +1812,12 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         resetZoom();
       }
       
+      // Handle Ctrl+Z for undo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        undoLastAction();
+      }
+      
       // Space key for panning
       if (e.code === 'Space') {
         if (containerRef.current) {
