@@ -416,7 +416,7 @@ function App() {
     <div className="h-screen max-h-screen flex flex-col text-gray-800 overflow-hidden">
       <header className="py-2 px-4 border-b border-gray-100 shadow-sm bg-white">
         <h1 className="text-2xl font-semibold text-center text-gray-800">
-          <span className="text-primary-500">Panel</span>Pachi - Manga SFX Editor
+          <span className="text-primary-500">Panel</span>Pachi - AI Manga Editing Tool
         </h1>
       </header>
       

@@ -2449,20 +2449,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         </div>
       )}
       
-      {/* Zoom info overlay */}
-      <div style={{
-        position: 'absolute',
-        top: '10px',
-        right: '10px',
-        padding: '5px 10px',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        color: '#fff',
-        borderRadius: '4px',
-        fontSize: '12px',
-        pointerEvents: 'none'
-      }}>
-        Scroll: Brush Size • Ctrl+Scroll: Zoom • Ctrl+0: Reset • Middle Mouse: Pan
-      </div>
       
       {/* Inpainting overlay */}
       {isInpainting && (
