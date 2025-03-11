@@ -500,12 +500,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           // Add the white rectangle
           canvas.add(whiteRect);
           
-          // Add to history stack for undo
-          historyStackRef.current.push({
-            type: 'selection',
-            data: whiteRect
-          });
-          
           // Create a text object for the translated text
           const fontSize = translation.textStyle?.fontSize || 
             Math.min(Math.max(10, canvasWidth * 0.05), Math.min(canvasWidth * 0.2, canvasHeight * 0.2));
@@ -544,13 +538,18 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           // Add the text to the canvas
           canvas.add(text);
           
-          // Add to history stack for undo
+          // Add to history stack for undo - Group rectangle and text together
           historyStackRef.current.push({
             type: 'selection',
             data: {
-              fabricObject: text
+              fabricObject: text,
+              backgroundRect: whiteRect
             }
           });
+          
+          // Update selection state
+          setLoadingStatus("Text added successfully");
+          setTimeout(() => setLoadingStatus(""), 1500);
         } finally {
           // Reset inpainting state
           setIsInpainting(false);
@@ -570,12 +569,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         
         // Add the white rectangle
         canvas.add(whiteRect);
-        
-        // Add to history stack for undo
-        historyStackRef.current.push({
-          type: 'selection',
-          data: whiteRect
-        });
         
         // Create a text object for the translated text
         const fontSize = translation.textStyle?.fontSize || 
@@ -615,11 +608,12 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Add the text to the canvas
         canvas.add(text);
         
-        // Add to history stack for undo
+        // Add to history stack for undo - Group rectangle and text together
         historyStackRef.current.push({
           type: 'selection',
           data: {
-            fabricObject: text
+            fabricObject: text,
+            backgroundRect: whiteRect
           }
         });
         
@@ -673,6 +667,15 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     // Remove all selection rectangles from canvas
     selectionsRef.current.forEach(selection => {
       canvas.remove(selection.fabricObject);
+    });
+    
+    // Also remove selection rectangles from history stack
+    // Filter out any history items that are selection rectangles
+    historyStackRef.current = historyStackRef.current.filter(item => {
+      return !(item.type === 'selection' && 
+               item.data && 
+               typeof item.data === 'object' && 
+               item.data.isSelectionRect);
     });
     
     // Clear selections array
@@ -785,6 +788,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       // Add to selections array
       selectionsRef.current.push(selection);
       
+      // Add to history stack for proper undo order
+      historyStackRef.current.push({
+        type: 'selection',
+        data: {
+          fabricObject: rect,
+          isSelectionRect: true,
+          selectionId: selection.id
+        }
+      });
+      
       // Notify parent component about selections change
       if (onSelectionsChange) {
         onSelectionsChange(true);
@@ -807,34 +820,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     
     // If no history, nothing to undo
     if (historyStackRef.current.length === 0) {
-      // Check if we have any selections to undo
-      if (selectionsRef.current.length > 0) {
-        // Get the last selection
-        const lastSelection = selectionsRef.current[selectionsRef.current.length - 1];
-        
-        // Remove the selection from the canvas
-        canvas.remove(lastSelection.fabricObject);
-        
-        // Remove from selections array
-        selectionsRef.current.pop();
-        
-        // Update has selections state
-        if (onSelectionsChange) {
-          onSelectionsChange(selectionsRef.current.length > 0);
-        }
-        
-        canvas.renderAll();
-        
-        setLoadingStatus("Selection undone");
-        setTimeout(() => {
-          if (loadingStatus === "Selection undone") {
-            setLoadingStatus("");
-          }
-        }, 1500);
-        
-        return;
-      }
-      
       setLoadingStatus("Nothing to undo");
       setTimeout(() => {
         if (loadingStatus === "Nothing to undo") {
@@ -877,25 +862,59 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         // Handle text selection undo
         const data = lastAction.data;
 
-          // Remove the fabric object
-        if (data && typeof data === 'object' && 'fabricObject' in data) {
-          canvas.remove(data.fabricObject);
-          
-          // If this was the selected text, clear the selection
-          if (selectedTextRef.current === data.fabricObject) {
-            selectedTextRef.current = null;
-            handleTextSelectionChange(false);
+        // Remove the fabric object
+        if (data && typeof data === 'object') {
+          // Check if this is a selection rectangle
+          if (data.isSelectionRect) {
+            // Remove the selection rectangle from canvas
+            canvas.remove(data.fabricObject);
+            
+            // Also remove from selections array
+            if (data.selectionId) {
+              const selectionIndex = selectionsRef.current.findIndex(s => s.id === data.selectionId);
+              if (selectionIndex !== -1) {
+                selectionsRef.current.splice(selectionIndex, 1);
+                
+                // Update has selections state
+                if (onSelectionsChange) {
+                  onSelectionsChange(selectionsRef.current.length > 0);
+                }
+              }
+            }
+            
+            setLoadingStatus("Selection undone");
+            setTimeout(() => {
+              if (loadingStatus === "Selection undone") {
+                setLoadingStatus("");
+              }
+            }, 1500);
+          } else {
+            // Remove the text object
+            if ('fabricObject' in data) {
+              canvas.remove(data.fabricObject);
+              
+              // If this was the selected text, clear the selection
+              if (selectedTextRef.current === data.fabricObject) {
+                selectedTextRef.current = null;
+                handleTextSelectionChange(false);
+              }
+            }
+            
+            // Remove the background rectangle if it exists
+            if ('backgroundRect' in data && data.backgroundRect) {
+              canvas.remove(data.backgroundRect);
+            }
+            
+            setLoadingStatus("Undone text placement");
+            setTimeout(() => {
+              if (loadingStatus === "Undone text placement") {
+                setLoadingStatus("");
+              }
+            }, 1500);
           }
         }
 
         canvas.renderAll();
-        
-        setLoadingStatus("Undone text placement");
-        setTimeout(() => {
-          if (loadingStatus === "Undone text placement") {
-            setLoadingStatus("");
-          }
-        }, 1500);
         return;
       }
     }
