@@ -451,7 +451,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
               widthRatio: translation.bounds.width / originalDimensions.width,
               heightRatio: translation.bounds.height / originalDimensions.height,
               fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
-              originalFontSize: fontSize // Store the original font size
+              originalFontSize: fontSize, // Store the original font size
+              lastWidth: canvasWidth // Initialize lastWidth to the current width
             }
           });
           
@@ -497,6 +498,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             evented: false,
           });
           
+          // Store the same relative position data on the rectangle for consistent positioning
+          whiteRect.set({
+            relativePosition: {
+              leftRatio: translation.bounds.left / originalDimensions.width,
+              topRatio: translation.bounds.top / originalDimensions.height,
+              widthRatio: translation.bounds.width / originalDimensions.width,
+              heightRatio: translation.bounds.height / originalDimensions.height
+            }
+          });
+          
           // Add the white rectangle
           canvas.add(whiteRect);
           
@@ -531,7 +542,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
               widthRatio: translation.bounds.width / originalDimensions.width,
               heightRatio: translation.bounds.height / originalDimensions.height,
               fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
-              originalFontSize: fontSize // Store the original font size
+              originalFontSize: fontSize, // Store the original font size
+              lastWidth: canvasWidth // Initialize lastWidth to the current width
             }
           });
           
@@ -565,6 +577,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           fill: 'white',
           selectable: false,
           evented: false,
+        });
+        
+        // Store the same relative position data on the rectangle for consistent positioning
+        whiteRect.set({
+          relativePosition: {
+            leftRatio: translation.bounds.left / originalDimensions.width,
+            topRatio: translation.bounds.top / originalDimensions.height,
+            widthRatio: translation.bounds.width / originalDimensions.width,
+            heightRatio: translation.bounds.height / originalDimensions.height
+          }
         });
         
         // Add the white rectangle
@@ -601,7 +623,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             widthRatio: translation.bounds.width / originalDimensions.width,
             heightRatio: translation.bounds.height / originalDimensions.height,
             fontSizeRatio: fontSize / canvasWidth, // Relative to width for consistent sizing
-            originalFontSize: fontSize // Store the original font size
+            originalFontSize: fontSize, // Store the original font size
+            lastWidth: canvasWidth // Initialize lastWidth to the current width
           }
         });
         
@@ -948,6 +971,13 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       
       const canvas = fabricCanvasRef.current;
       
+      // Save current canvas objects except background image and mask paths
+      // We need to preserve text objects and their background rectangles
+      const objectsToPreserve = canvas.getObjects().filter(obj => 
+        !(obj instanceof FabricImage) && // Not a background image
+        !(obj.type === 'path') // Not a mask path
+      );
+      
       // Clear the canvas
       canvas.clear();
       
@@ -994,12 +1024,27 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         fabricImg.selectable = false;
         fabricImg.evented = false;
         
-        // Add the image to the canvas
+        // Add the image to the canvas (it will be at the bottom)
         canvas.add(fabricImg);
-        canvas.renderAll();
         
         // Restore the current image blob reference
         currentImageBlobRef.current = data.imageBlob;
+        
+        // Restore the previously saved objects (they will be on top of the background)
+        objectsToPreserve.forEach(obj => {
+          canvas.add(obj);
+        });
+        
+        // Call updateTextElementPositions to ensure text and rectangles are positioned correctly
+        // relative to the newly restored background image
+        updateTextElementPositions();
+        
+        // Remove mask paths from the history stack since they're no longer visible
+        historyStackRef.current = historyStackRef.current.filter(item => 
+          !(item.type === 'path')
+        );
+        
+        canvas.renderAll();
         
         setLoadingStatus("Previous image restored");
         setTimeout(() => setLoadingStatus(""), 1500);
@@ -1065,11 +1110,18 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         
         // If we have a previous image state, add it to the history stack
         if (previousImageBlob) {
+          // Instead of trying to fully serialize objects (which can be complex),
+          // simply note which objects are present for preservation during undo
+          const nonBackgroundObjectCount = canvas.getObjects()
+            .filter(obj => !(obj instanceof FabricImage) && !(obj.type === 'path'))
+            .length;
+            
           historyStackRef.current.push({
             type: 'inpainting',
             data: {
               imageBlob: previousImageBlob,
-              dimensions: previousDimensions
+              dimensions: previousDimensions,
+              hasNonBackgroundObjects: nonBackgroundObjectCount > 0
             }
           });
         }
@@ -1335,6 +1387,14 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
             objectsToPreserve.forEach(obj => {
               canvas.add(obj);
             });
+            
+            // Update text element positions to maintain proper positioning with the new background image
+            updateTextElementPositions();
+            
+            // Remove mask paths from the history stack since they're no longer visible
+            historyStackRef.current = historyStackRef.current.filter(item => 
+              !(item.type === 'path')
+            );
             
             canvas.renderAll();
             
@@ -2042,6 +2102,104 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
     
     canvas.on('mouse:dblclick', handleDoubleClick);
     
+    // Add handler for object:modified to update relative position data
+    const handleObjectModified = (e: any) => {
+      const obj = e.target;
+      if (!obj) return;
+      
+      // Only process Text or Textbox objects
+      if (obj instanceof Text || obj instanceof Textbox) {
+        // Get the background image to calculate ratios
+        const objects = canvas.getObjects();
+        const backgroundImage = objects.find(o => o instanceof FabricImage);
+        
+        if (!backgroundImage || !(backgroundImage instanceof FabricImage) || !originalImageDimensionsRef.current) return;
+        
+        // Get the background image properties
+        const imgWidth = backgroundImage.width || 1;
+        const imgHeight = backgroundImage.height || 1;
+        const imgScaleX = (backgroundImage as any).scaleX || 1;
+        const imgScaleY = (backgroundImage as any).scaleY || 1;
+        const imgLeft = backgroundImage.left || 0;
+        const imgTop = backgroundImage.top || 0;
+        
+        // Calculate new relative positions based on current object position
+        const leftRatio = (obj.left! - imgLeft) / (imgWidth * imgScaleX);
+        const topRatio = (obj.top! - imgTop) / (imgHeight * imgScaleY);
+        
+        // Calculate width and height ratios
+        const widthRatio = (obj instanceof Textbox) 
+          ? obj.width! / (imgWidth * imgScaleX)
+          : ((obj.width || 0) * (obj.scaleX || 1)) / (imgWidth * imgScaleX);
+        const heightRatio = ((obj.height || 0) * (obj.scaleY || 1)) / (imgHeight * imgScaleY);
+        
+        // Calculate font size ratio based on current font size and width
+        const fontSizeRatio = (obj.fontSize || 16) / ((imgWidth * imgScaleX) * widthRatio);
+        
+        // Update the relativePosition with the new values
+        obj.set({
+          relativePosition: {
+            ...((obj as any).relativePosition || {}),
+            leftRatio,
+            topRatio,
+            widthRatio,
+            heightRatio,
+            fontSizeRatio,
+            originalFontSize: obj.fontSize
+          }
+        });
+        
+        // If this is a textbox, also update the width
+        if (obj instanceof Textbox) {
+          // Store the current text wrapping state - save the actual width in object coordinates
+          // This width won't be affected by canvas zoom, maintaining consistent text wrapping
+          (obj as any).relativePosition.lastWidth = obj.width;
+          (obj as any).relativePosition.lastScaleX = obj.scaleX;
+          // We don't need to store zoom level anymore since we're not using it
+        }
+      }
+    };
+    
+    canvas.on('object:modified', handleObjectModified);
+    
+    // Also listen for object:moving to update relative positions during drag
+    const handleObjectMoving = (e: any) => {
+      // If text is being edited, don't interfere with cursor placement
+      if (e.target && (e.target instanceof Text || e.target instanceof Textbox) && !(e.target as any).isEditing) {
+        // Just update the lastMovedPosition during dragging - we'll finalize on object:modified
+        const obj = e.target;
+        if (!obj.lastMovedPosition) {
+          obj.lastMovedPosition = { left: obj.left, top: obj.top };
+        } else {
+          obj.lastMovedPosition.left = obj.left;
+          obj.lastMovedPosition.top = obj.top;
+        }
+      }
+    };
+    
+    // Listen for object:scaling to update relative positions during resize
+    const handleObjectScaling = (e: any) => {
+      if (e.target && (e.target instanceof Text || e.target instanceof Textbox)) {
+        // Just track that scaling has happened - we'll finalize on object:modified
+        e.target.hasBeenScaled = true;
+      }
+    };
+    
+    canvas.on('object:moving', handleObjectMoving);
+    canvas.on('object:scaling', handleObjectScaling);
+    
+    // Handler for text editing completed
+    const handleTextEditingExited = (e: any) => {
+      const obj = e.target;
+      if (obj instanceof Text || obj instanceof Textbox) {
+        // The text content has changed, so trigger the object:modified handler
+        handleObjectModified({ target: obj });
+      }
+    };
+    
+    canvas.on('text:changed', handleTextEditingExited);
+    canvas.on('editing:exited', handleTextEditingExited); // Add this to capture when editing is done
+    
     // Add canvas mouse:down event handler to track text selection
     const handleObjectSelected = (e: any) => {
       // Check if selected object is a text
@@ -2073,6 +2231,11 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
       canvas.off('mouse:move', handleSelectionMove);
       canvas.off('mouse:up', handleSelectionEnd);
       canvas.off('mouse:dblclick', handleDoubleClick);
+      canvas.off('object:modified', handleObjectModified);
+      canvas.off('text:changed', handleTextEditingExited);
+      canvas.off('editing:exited', handleTextEditingExited);
+      canvas.off('object:moving', handleObjectMoving);
+      canvas.off('object:scaling', handleObjectScaling);
       canvas.off('selection:created', handleObjectSelected);
       canvas.off('selection:updated', handleObjectSelected);
       canvas.off('selection:cleared', () => {});
@@ -2143,9 +2306,16 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           fontSize: newFontSize
         };
         
-        // If it's a Textbox, update the width as well
+        // If it's a Textbox, preserve the width exactly as it was set by the user
         if (obj instanceof Textbox) {
-          updates.width = newWidth;
+          if (relativePosition.lastWidth) {
+            // Just use the stored width directly - fabric.js handles scaling with zoom automatically
+            // This keeps text wrapping consistent regardless of zoom level
+            updates.width = relativePosition.lastWidth;
+          } else {
+            // If no lastWidth is saved, just use the calculated width
+            updates.width = newWidth;
+          }
         }
         
         // Apply all updates
@@ -2505,4 +2675,4 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   );
 });
 
-export default CanvasEditor; 
+export default CanvasEditor;
