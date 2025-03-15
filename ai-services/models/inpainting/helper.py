@@ -1,9 +1,7 @@
 import os
-import hashlib
 import torch
 import numpy as np
 import cv2
-from typing import Union
 
 def norm_img(img):
     if isinstance(img, np.ndarray):

@@ -1,9 +1,9 @@
-import os
 import cv2
 import numpy as np
 import torch
 
-from helper import norm_img, load_jit_model, pad_img_to_modulo
+
+from models.inpainting.helper import norm_img, load_jit_model, pad_img_to_modulo
 
 class AnimeLaMa:
     name = "anime-lama"

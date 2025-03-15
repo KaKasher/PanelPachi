@@ -1,78 +1,50 @@
-#!/usr/bin/env python3
 import os
 import sys
 import base64
 import io
 import json
-import subprocess
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from pathlib import Path
 import dotenv
 import logging
-import time
-
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 from PIL import Image
 import cv2
 import requests
-
+import torch
+from contextlib import asynccontextmanager
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-dotenv.load_dotenv()
-
-# Enable access to the parent directory for imports
+# General paths
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 sys.path.append(str(ROOT_DIR))
 
-# Add models directory to sys.path
-models_dir = ROOT_DIR / "models"
-sys.path.append(str(models_dir))
-
-# Import OCR model
-from models.ocr.ocr import MangaOCR
-
-app = FastAPI(title="PanelPachi AI API", 
-              description="API for manga panel inpainting and other AI services")
-
-# Add CORS middleware to allow cross-origin requests from the web app
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # For development - restrict this in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Path to the inpainting model script
-MODELS_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "models"
+# Models paths
+MODELS_DIR = ROOT_DIR / "models"
 INPAINTING_DIR = MODELS_DIR / "inpainting"
 INPAINTING_SCRIPT = INPAINTING_DIR / "inpaint_api.py"
+OCR_DIR = MODELS_DIR / "ocr"
+OCR_SCRIPT = OCR_DIR / "ocr.py"
+sys.path.append(str(MODELS_DIR))
+
+# Import models
+from models.ocr.ocr import get_ocr_instance
+from models.inpainting.model import AnimeLaMa
+# Load environment variables from .env file
+dotenv.load_dotenv(ROOT_DIR / ".env")
 
 # Get DeepL API key from environment variable
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
 if not DEEPL_API_KEY:
     print("Warning: DEEPL_API_KEY environment variable not set. Translation will not work.")
 
-# Add parent directory to sys.path
-current_dir = Path(__file__).resolve().parent
-parent_dir = current_dir.parent
-sys.path.append(str(parent_dir))
-
-# Add models directory to sys.path
-models_dir = parent_dir / "models"
-sys.path.append(str(models_dir))
-
-# Import OCR model
-from models.ocr.ocr import get_ocr_instance
 
 class InpaintResponse(BaseModel):
     success: bool
@@ -100,6 +72,79 @@ class TranslationResponse(BaseModel):
     original: str
     translated: str
 
+inpaint_model = None
+ocr_model = None
+
+def translate_batch(texts: List[str]) -> List[str]:
+    """
+    Translate a batch of texts from Japanese to English using the DeepL API.
+
+    Args:
+        texts (List[str]): List of texts to translate.
+
+    Returns:
+        List[str]: List of translated texts in the same order as the input.
+
+    Raises:
+        ValueError: If the API key is missing or the API request fails.
+    """
+    if not DEEPL_API_KEY:
+        raise ValueError("DeepL API key not configured")
+
+    response = requests.post(
+        "https://api-free.deepl.com/v2/translate",
+        headers={"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"},
+        data={
+            "text": texts,  # DeepL accepts a list of texts
+            "target_lang": "EN",
+            "source_lang": "JA"
+        }
+    )
+
+    if response.status_code != 200:
+        raise ValueError(f"DeepL API error: {response.text}")
+
+    translation_data = response.json()
+    translations = [t.get("text", "Translation error") for t in translation_data.get("translations", [])]
+
+    if len(translations) != len(texts):
+        raise ValueError("Mismatch in number of translations received from DeepL")
+
+    return translations
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    #startup: load models
+    global inpaint_model, ocr_model
+    # Initialize inpainting model with dynamic device selection
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inpaint_model = AnimeLaMa(device=device)
+    print(f"Inpainting model loaded on {device}")
+
+    # Initialize OCR model
+    ocr_model = get_ocr_instance()
+    print("OCR model loaded")
+
+    yield
+
+    print("Shutting down...")
+    
+app = FastAPI(
+    title="PanelPachi AI API", 
+    description="API for manga panel inpainting and other AI services",
+    lifespan=lifespan
+)
+
+# Add CORS middleware to allow cross-origin requests from the web app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For development - restrict this in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to PanelPachi AI API"}
@@ -108,11 +153,9 @@ async def root():
 async def health_check():
     return {"status": "ok"}
 
-@app.post("/inpaint", response_model=InpaintResponse)
-async def inpaint_image(
-    image: UploadFile = File(...),
-    mask: UploadFile = File(...),
-):
+
+@app.post("/inpaint")
+async def inpaint_image(image: UploadFile, mask: UploadFile):
     """
     Inpaint an image using the provided mask.
     
@@ -122,346 +165,179 @@ async def inpaint_image(
     Returns the inpainted image as a base64-encoded string.
     """
     try:
-        # Read input files
-        image_data = await image.read()
-        mask_data = await mask.read()
-        
-        # Store image filename for debugging
-        image_filename = image.filename
-        print(f"Received image filename: {image_filename}")
-        input_ext = os.path.splitext(image_filename)[1].lower() if image_filename else '.png'
-        print(f"Determined input extension: {input_ext}")
-        
-        # Convert to PIL Images
-        try:
-            print(f"Attempting to read image data, size: {len(image_data)} bytes")
-            image_pil = Image.open(io.BytesIO(image_data))
-            print(f"Image opened successfully: {image_pil.format}, {image_pil.size}")
-        except Exception as e:
-            print(f"Error opening image: {str(e)}")
-            # Log first few bytes for debugging
-            if len(image_data) > 0:
-                print(f"First 20 bytes of image data: {image_data[:20]}")
-            else:
-                print("Image data is empty")
-            raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}")
-        
-        try:
-            mask_pil = Image.open(io.BytesIO(mask_data))
-            print(f"Mask opened successfully: {mask_pil.format}, {mask_pil.size}")
-        except Exception as e:
-            print(f"Error opening mask: {str(e)}")
-            # Log first few bytes for debugging
-            if len(mask_data) > 0:
-                print(f"First 20 bytes of mask data: {mask_data[:20]}")
-            else:
-                print("Mask data is empty")
-            raise HTTPException(status_code=400, detail=f"Invalid mask data: {str(e)}")
-        
+        img = Image.open(image.file).convert("RGB")
+        mask_img = Image.open(mask.file).convert("L")  # Grayscale
+
         # Convert to numpy arrays
-        image_np = np.array(image_pil)
-        mask_np = np.array(mask_pil)
+        img_np = np.array(img)
+        mask_np = np.array(mask_img)
+
+        # Validate dimensions
+        if img_np.shape[:2] != mask_np.shape[:2]:
+            raise HTTPException(400, "Mask dimensions must match image dimensions")
         
-        # If mask is RGB, convert to grayscale
-        if len(mask_np.shape) == 3 and mask_np.shape[2] == 3:
-            mask_np = np.mean(mask_np, axis=2).astype(np.uint8)
-        
-        # Threshold mask to binary (0 or 255)
+        # Prepare mask (binary threshold)
         _, mask_np = cv2.threshold(mask_np, 127, 255, cv2.THRESH_BINARY)
         
-        # Create inpaint_api.py if it doesn't exist
-        create_inpaint_api_script()
+        # Convert RGB to BGR for model compatibility
+        img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         
-        # Call the inpainting script as a subprocess
-        # For this implementation, we'll create temporary files to pass between processes
-        tmp_dir = Path("/tmp/panelpachi")
-        tmp_dir.mkdir(exist_ok=True)
+        # Perform inpainting using the global inpaint_model
+        result = inpaint_model.inpaint(img_np, mask_np)
         
-        tmp_image_path = tmp_dir / f"tmp_image_{os.getpid()}.png"
-        tmp_mask_path = tmp_dir / f"tmp_mask_{os.getpid()}.png"
-        tmp_output_path = tmp_dir / f"tmp_output_{os.getpid()}.png"
+        # Convert result back to RGB
+        result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
         
-        # Save temporary files
-        image_pil.save(tmp_image_path)
+        # Encode output as PNG
+        output_img = Image.fromarray(result_rgb)
+        buffered = io.BytesIO()
+        output_img.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         
-        # Ensure mask is saved as grayscale
-        Image.fromarray(mask_np).save(tmp_mask_path)
-        
-        # Run the inpainting subprocess
-        env = os.environ.copy()
-        python_executable = sys.executable
-        
-        # Get the python executable from the inpainting model's virtual environment if it exists
-        venv_python = INPAINTING_DIR / ".venv" / "bin" / "python"
-        if venv_python.exists():
-            python_executable = str(venv_python)
-        
-        cmd = [
-            python_executable,
-            str(INPAINTING_SCRIPT),
-            "--image", str(tmp_image_path),
-            "--mask", str(tmp_mask_path),
-            "--output", str(tmp_output_path),
-            "--device", "cpu"  # Default to CPU - can be changed based on availability
-        ]
-        
-        process = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True
-        )
-        
-        if process.returncode != 0:
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Inpainting failed: {process.stderr}"
-            )
-        
-        # Read the output image
-        if not tmp_output_path.exists():
-            raise HTTPException(
-                status_code=500,
-                detail="Inpainting did not produce output file"
-            )
-        
-        # Convert output to base64
-        with open(tmp_output_path, "rb") as f:
-            output_data = f.read()
-            output_base64 = base64.b64encode(output_data).decode("utf-8")
-            print(f"Base64 image size: {len(output_base64)} bytes")
-            print(f"First 30 characters of base64: {output_base64[:30]}...")
-        
-        # Only clean up temporary files after successful processing
-        for path in [tmp_image_path, tmp_mask_path, tmp_output_path]:
-            if path.exists():
-                path.unlink()
-                
-        # Determine image format for the data URL
-        image_format = "jpeg" if tmp_output_path.suffix.lower() in ['.jpg', '.jpeg'] else "png"
-                
-        return InpaintResponse(
-            success=True,
-            message="Inpainting completed successfully",
-            image=output_base64,
-            format=image_format
-        )
-    
+        return {
+            "success": True,
+            "message": "Inpainting completed successfully",
+            "image": img_base64,
+            "format": "png"
+        }
     except Exception as e:
-        import traceback
-        return InpaintResponse(
-            success=False,
-            message=f"Inpainting failed: {str(e)}\n{traceback.format_exc()}"
-        )
-
-def create_inpaint_api_script():
-    """Create the inpaint_api.py script if it doesn't exist"""
-    if INPAINTING_SCRIPT.exists():
-        return
+        raise HTTPException(500, f"Inpainting failed: {str(e)}")
     
-    script_content = """#!/usr/bin/env python3
-import os
-import sys
-import argparse
-from pathlib import Path
-
-import cv2
-import torch
-import numpy as np
-
-# Add the parent directory to the path to allow importing from sibling modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from model import AnimeLaMa
-from helper import prepare_image_mask, ensure_directory
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Anime-LaMa inpainting API script")
-    parser.add_argument("--image", type=str, required=True, help="Path to input image file")
-    parser.add_argument("--mask", type=str, required=True, help="Path to mask image file")
-    parser.add_argument("--output", type=str, required=True, help="Path to output image file")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda or cpu)")
-    
-    return parser.parse_args()
-
-def main():
-    args = parse_args()
-    
-    # Check CUDA availability if requested
-    if args.device == "cuda" and not torch.cuda.is_available():
-        print("CUDA requested but not available. Using CPU instead.")
-        args.device = "cpu"
-    
-    # Initialize model
-    print(f"Initializing Anime-LaMa model on {args.device}...")
-    model = AnimeLaMa(device=args.device)
-    
-    # Process the image and mask
-    try:
-        image, mask = prepare_image_mask(args.image, args.mask)
-        
-        # Run inpainting
-        result = model.inpaint(image, mask)
-        
-        # Ensure output directory exists
-        ensure_directory(os.path.dirname(args.output))
-        
-        # Save result
-        cv2.imwrite(args.output, result)
-        print(f"Processed: {args.image} -> {args.output}")
-        return 0
-    except Exception as e:
-        print(f"Error processing image: {str(e)}", file=sys.stderr)
-        return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
-"""
-    
-    with open(INPAINTING_SCRIPT, "w") as f:
-        f.write(script_content)
-    
-    # Make it executable
-    os.chmod(INPAINTING_SCRIPT, 0o755)
-
 @app.post("/ocr", response_model=List[OCRItem])
 async def process_ocr(
     image: UploadFile = File(...),
     selections: str = Form(...),
 ):
     """
-    Process OCR on the selected regions of the image.
-    Returns the extracted text for each selection.
+    Process OCR on selected regions of an uploaded image.
+    Returns extracted text for each selection.
+
+    - **image**: The image file to process.
+    - **selections**: JSON string containing a list of selections with id, left, top, width, height.
     """
     try:
-        # Parse selections
-        selections_data = json.loads(selections)
-        logger.info(f"Received {len(selections_data)} selections")
+        # Parse and validate selections
+        try:
+            selections_data = json.loads(selections)
+            if not isinstance(selections_data, list):
+                raise ValueError("Selections must be a list")
+            for sel in selections_data:
+                required_keys = {"id", "left", "top", "width", "height"}
+                if not all(key in sel for key in required_keys):
+                    raise ValueError(f"Selection missing required fields: {required_keys}")
+                # Validate numeric values
+                for key in ["left", "top", "width", "height"]:
+                    if not isinstance(sel[key], (int, float)) or sel[key] < 0:
+                        raise ValueError(f"Selection {sel['id']}: '{key}' must be a non-negative number")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid selections JSON: {str(e)}")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         
-        # Read image file
+        logger.info(f"Received {len(selections_data)} valid selections")
+
+        # Read and validate image
         contents = await image.read()
-        img = Image.open(io.BytesIO(contents))
+        try:
+            img = Image.open(io.BytesIO(contents)).convert("RGB")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}")
+        
         img_array = np.array(img)
-        
-        # Log image info
-        logger.info(f"Image dimensions: {img.size}, mode: {img.mode}, array shape: {img_array.shape}")
-        
-        # Initialize the OCR model (using singleton pattern)
+        img_height, img_width = img_array.shape[:2]
+        logger.info(f"Image loaded: {img_width}x{img_height}, RGB mode")
+
+        # Get OCR model instance
         ocr_model = get_ocr_instance()
-        
-        # Process each selection
+        if ocr_model.model_load_error:
+            raise HTTPException(status_code=500, detail=f"OCR model unavailable: {ocr_model.model_load_error}")
+
+        # Process selections
         results = []
-        
-        # Process each selection with appropriate scaling
         for selection in selections_data:
-            selection_id = selection.get("id", "unknown")
-            left = int(selection.get("left", 0)) 
-            top = int(selection.get("top", 0))
-            width = int(selection.get("width", 100))
-            height = int(selection.get("height", 100))
-            
+            selection_id = selection["id"]
+            left = int(selection["left"])
+            top = int(selection["top"])
+            width = int(selection["width"])
+            height = int(selection["height"])
+
+            # Adjust coordinates to image bounds
+            left = max(0, min(left, img_width - 1))
+            top = max(0, min(top, img_height - 1))
+            right = min(left + width, img_width)
+            bottom = min(top + height, img_height)
+            width = right - left
+            height = bottom - top
+
             logger.info(f"Processing selection {selection_id}: left={left}, top={top}, width={width}, height={height}")
-            
-            # Ensure coordinates are within image bounds
-            left = max(0, left)
-            top = max(0, top)
-            
-            # Check image dimensions
-            if len(img_array.shape) == 2:
-                img_height, img_width = img_array.shape
-            else:
-                img_height, img_width = img_array.shape[:2]
-                
-            width = min(width, img_width - left)
-            height = min(height, img_height - top)
-            
-            # Skip invalid selections
+
             if width <= 0 or height <= 0:
-                logger.warning(f"Skipping invalid selection {selection_id} with dimensions: width={width}, height={height}")
+                logger.warning(f"Invalid selection {selection_id}: width={width}, height={height}")
                 results.append(OCRItem(id=selection_id, text="Error: Invalid selection size"))
                 continue
-            
+
             try:
-                # Crop the image
-                cropped = img_array[top:top+height, left:left+width]
-                
-                # Convert crop to PIL Image
-                cropped_img = Image.fromarray(cropped)
-                
-                # Perform OCR on the cropped image
+                # Crop image
+                cropped_array = img_array[top:bottom, left:right]
+                cropped_img = Image.fromarray(cropped_array)
+
+                # Perform OCR
                 logger.info(f"Running OCR on selection {selection_id}")
                 ocr_text = ocr_model(cropped_img)
-                logger.info(f"OCR result for selection {selection_id}: {ocr_text}")
                 
-                # If OCR fails, use a placeholder
+                # Handle OCR failure
                 if ocr_text is None or ocr_text.strip() == "":
-                    logger.warning(f"OCR returned empty result for selection {selection_id}")
-                    example_texts = [
-                        "こんにちは",
-                        "さようなら",
-                        "元気ですか",
-                        "私は元気です",
-                        "日本語を勉強しています",
-                        "マンガが好きです",
-                        "とても面白いですね"
-                    ]
-                    import random
-                    ocr_text = random.choice(example_texts)
-                    logger.warning(f"Using placeholder text for selection {selection_id}: {ocr_text}")
+                    logger.warning(f"OCR failed for selection {selection_id}")
+                    ocr_text = "Error: No text detected"
                 
+                logger.info(f"OCR result for {selection_id}: {ocr_text}")
                 results.append(OCRItem(id=selection_id, text=ocr_text))
             except Exception as e:
                 logger.error(f"Error processing selection {selection_id}: {str(e)}")
                 results.append(OCRItem(id=selection_id, text=f"Error: {str(e)}"))
-        
-        # Return OCR results
+            
         return results
-    
     except Exception as e:
-        logger.error(f"OCR processing failed: {str(e)}")
+        logger.error(f"Error processing OCR: {str(e)}")
         raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
-
+    
 @app.post("/translate", response_model=List[TranslationResponse])
 async def translate_text(items: List[TranslationItem]):
     """
-    Translate the extracted text from Japanese to English.
-    Returns both the original and translated text.
-    """
-    try:
-        if not DEEPL_API_KEY:
-            raise HTTPException(status_code=500, detail="DeepL API key not configured")
-        
-        results = []
-        
-        for item in items:
-            # Call DeepL API
-            response = requests.post(
-                "https://api-free.deepl.com/v2/translate",
-                headers={"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"},
-                data={
-                    "text": item.text,
-                    "target_lang": "EN",
-                    "source_lang": "JA"
-                }
-            )
-            
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail=f"DeepL API error: {response.text}")
-            
-            translation_data = response.json()
-            translated_text = translation_data.get("translations", [{}])[0].get("text", "Translation error")
-            
-            results.append(TranslationResponse(
-                id=item.id,
-                original=item.text,
-                translated=translated_text
-            ))
-        
-        return results
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+    Translate extracted text from Japanese to English using DeepL API.
 
+    Args:
+        items (List[TranslationItem]): List of items containing id and text to translate.
+
+    Returns:
+        List[TranslationResponse]: List of responses with id, original text, and translated text.
+
+    Raises:
+        HTTPException: If input is invalid or translation fails.
+    """
+    if not items:
+        raise HTTPException(status_code=400, detail="No items provided for translation")
+
+    # Extract texts and ids from items
+    texts = [item.text for item in items]
+    ids = [item.id for item in items]
+
+    logger.info(f"Translating {len(items)} items")
+
+    try:
+        translations = translate_batch(texts)
+        results = [
+            TranslationResponse(id=id_, original=text, translated=translation)
+            for id_, text, translation in zip(ids, texts, translations)
+        ]
+        return results
+    except ValueError as e:
+        logger.error(f"Translation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error during translation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+    
 if __name__ == "__main__":
     import cv2  # Import here to avoid import error in the global scope if OpenCV is not installed
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) 
