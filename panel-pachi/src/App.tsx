@@ -19,7 +19,6 @@ function App() {
   const [isInpainting, setIsInpainting] = useState<boolean>(false);
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [alertType, setAlertType] = useState<'success' | 'error'>('success');
-  const [apiConnected, setApiConnected] = useState<boolean | null>(null);
   const [hasSelections, setHasSelections] = useState<boolean>(false);
   const [showTranslationsPanel, setShowTranslationsPanel] = useState<boolean>(false);
   const [translations, setTranslations] = useState<Translation[]>([]);
@@ -52,35 +51,6 @@ function App() {
     };
     
     loadMangaImage();
-  }, []);
-
-  // Check API connectivity on mount
-  useEffect(() => {
-    const checkApiConnectivity = async () => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        
-        const response = await fetch(`${API_URL}/health`, {
-          signal: controller.signal
-        }).catch(() => null);
-        
-        clearTimeout(timeoutId);
-        const isConnected = !!response && response.ok;
-        setApiConnected(isConnected);
-      } catch (error) {
-        setApiConnected(false);
-      }
-    };
-    
-    checkApiConnectivity();
-    
-    // Retry connecting to API every 30 seconds
-    const intervalId = setInterval(checkApiConnectivity, 30000);
-    
-    return () => {
-      clearInterval(intervalId);
-    };
   }, []);
 
   // Ensure the app takes up the full viewport and prevents scrolling
@@ -122,10 +92,6 @@ function App() {
   
   // Handle export mask functionality
   const handleExportMask = () => {
-    if (!apiConnected) {
-      return;
-    }
-    
     setIsInpainting(true);
     if (canvasEditorRef.current && typeof canvasEditorRef.current.exportMask === 'function') {
       canvasEditorRef.current.exportMask()
@@ -199,7 +165,7 @@ function App() {
   
   // Handle translate selected functionality
   const handleTranslateSelected = async () => {
-    if (!apiConnected || !canvasEditorRef.current) {
+    if (!canvasEditorRef.current) {
       return;
     }
 
@@ -449,9 +415,9 @@ function App() {
               <Toolbar 
                 currentTool={currentTool} 
                 onToolChange={handleToolChange}
-                onExportMask={apiConnected ? handleExportMask : undefined}
+                onExportMask={handleExportMask}
                 onUndo={handleUndo}
-                onTranslateSelected={apiConnected ? handleTranslateSelected : undefined}
+                onTranslateSelected={handleTranslateSelected}
                 isInpainting={isInpainting}
                 isTranslating={isTranslating}
                 hasSelections={hasSelections}
@@ -541,22 +507,6 @@ function App() {
           </div>
         )}
       </main>
-      
-      {/* API status indicator */}
-      {apiConnected === false && (
-        <div className="fixed top-3 right-3 bg-red-50 text-red-600 px-3 py-1.5 rounded-lg border border-red-200 text-xs font-medium shadow-sm flex items-center">
-          <div className="w-2 h-2 rounded-full bg-red-500 mr-2 animate-pulse"></div>
-          API Disconnected
-        </div>
-      )}
-      
-      {/* API connected indicator */}
-      {apiConnected === true && (
-        <div className="fixed top-3 right-3 bg-green-50 text-green-600 px-3 py-1.5 rounded-lg border border-green-200 text-xs font-medium shadow-sm flex items-center">
-          <div className="w-2 h-2 rounded-full bg-green-500 mr-2"></div>
-          API Connected
-        </div>
-      )}
       
       {/* Footer/status bar */}
       <div className="py-1 bg-white bg-opacity-90 border-t border-gray-100 text-gray-500 text-center text-xs">
