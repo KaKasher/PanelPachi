@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/Toolbar.tsx","./src/fabric.d.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/CanvasEditor.tsx","./src/components/ImageUploader.tsx","./src/components/Toolbar.tsx","./src/components/TranslationPanel.tsx"],"errors":true,"version":"5.7.3"}
+{"root":["./src/App.tsx","./src/fabric.d.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/CanvasEditor.tsx","./src/components/ImageUploader.tsx","./src/components/Toolbar.tsx","./src/components/TranslationPanel.tsx"],"version":"5.7.3"}

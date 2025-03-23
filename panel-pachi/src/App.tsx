@@ -163,7 +163,6 @@ function App() {
       
       // Create a filename based on the original image name
       const originalName = uploadedImage.name;
-      const extension = originalName.substring(originalName.lastIndexOf('.'));
       const baseName = originalName.substring(0, originalName.lastIndexOf('.'));
       const newFilename = `${baseName}_edited.png`; // Always save as PNG
       
@@ -398,7 +397,7 @@ function App() {
   };
 
   // Update handleTextSelection to remove text options
-  const handleTextSelection = (isTextSelected: boolean) => {
+  const handleTextSelection = () => {
     // We've removed text styling options, so this function is simplified
     // It may still be needed for other functionality, so we're keeping it minimal
   };
@@ -451,7 +450,6 @@ function App() {
                 currentTool={currentTool} 
                 onToolChange={handleToolChange}
                 onExportMask={apiConnected ? handleExportMask : undefined}
-                onSaveImage={handleSaveImage}
                 onUndo={handleUndo}
                 onTranslateSelected={apiConnected ? handleTranslateSelected : undefined}
                 isInpainting={isInpainting}

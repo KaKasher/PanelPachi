@@ -48,7 +48,7 @@ type HistoryAction = {
   data: any;
 };
 
-const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onSelectionHover, onTextSelection }, ref) => {
+const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, tool, onSelectionsChange, onTextSelection }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2287,7 +2287,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         });
       } else if (obj instanceof Text || obj instanceof Textbox) {
         // Handle both regular Text and Textbox objects
-        const { leftRatio, topRatio, widthRatio, heightRatio } = relativePosition;
+        const { leftRatio, topRatio, widthRatio } = relativePosition;
         
         // Calculate new position based on the image
         const newLeft = imgLeft + (leftRatio * imgWidth * imgScaleX);
@@ -2295,7 +2295,6 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         const newWidth = widthRatio * imgWidth * imgScaleX;
         
         // Calculate new font size based on dimensions
-        const fontSize = relativePosition.originalFontSize || 16;
         const fontSizeRatio = relativePosition.fontSizeRatio || 0.1;
         const newFontSize = Math.max(12, Math.min(newWidth * fontSizeRatio, 36));
         
@@ -2356,7 +2355,7 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
   
   // Function to export the canvas as a high-resolution image
   const exportCanvasAsImage = (): Promise<Blob | null> => {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       try {
         if (!fabricCanvasRef.current || !originalImageDimensionsRef.current) {
           console.error("Canvas or original dimensions not available");
