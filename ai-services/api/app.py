@@ -45,6 +45,15 @@ DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
 if not DEEPL_API_KEY:
     print("Warning: DEEPL_API_KEY environment variable not set. Translation will not work.")
 
+# List of allowed origins for CORS
+allowed_origins_list = [
+    "https://panelpachi.com",             # Production website with custom domain
+    "https://panelpachi.vercel.app",      # Main Vercel deployment
+    "https://panelpachi-git-main.vercel.app", # Main branch preview
+    "http://localhost:3000",              # Local development frontend
+    "http://localhost:8000",              # Local development backend
+    "http://localhost:5173"               # Vite default dev server
+]
 
 class InpaintResponse(BaseModel):
     success: bool
@@ -138,7 +147,7 @@ app = FastAPI(
 # Add CORS middleware to allow cross-origin requests from the web app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development - restrict this in production
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
