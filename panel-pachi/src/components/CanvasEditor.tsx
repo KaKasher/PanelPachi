@@ -2374,26 +2374,8 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         const currentZoom = canvas.getZoom();
         const originalVpt = [...canvas.viewportTransform || [1, 0, 0, 1, 0, 0]];
         
-        // Temporarily reset zoom for accurate export
-        canvas.setZoom(1);
-        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-        
-        // Create a new canvas with original image dimensions for export
-        const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = originalDimensions.width;
-        exportCanvas.height = originalDimensions.height;
-        const exportCtx = exportCanvas.getContext('2d');
-        
-        if (!exportCtx) {
-          setLoadingStatus("Failed to create export context");
-          resolve(null);
-          return;
-        }
-        
-        // Get all objects on the canvas
-        const objects = canvas.getObjects();
-        
         // Find the background image
+        const objects = canvas.getObjects();
         const backgroundImage = objects.find(obj => obj instanceof FabricImage);
         
         if (!backgroundImage || !(backgroundImage instanceof FabricImage)) {
@@ -2402,184 +2384,30 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
           return;
         }
         
-        // Calculate scale factors
-        const imgWidth = backgroundImage.width || 1;
-        const imgHeight = backgroundImage.height || 1;
-        const imgScaleX = (backgroundImage as any).scaleX || 1;
-        const imgScaleY = (backgroundImage as any).scaleY || 1;
+        // Temporarily reset zoom for accurate export
+        canvas.setZoom(1);
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        
+        // Calculate crop boundaries based on the background image
         const imgLeft = backgroundImage.left || 0;
         const imgTop = backgroundImage.top || 0;
+        const imgWidth = (backgroundImage.width || 0) * ((backgroundImage as any).scaleX || 1);
+        const imgHeight = (backgroundImage.height || 0) * ((backgroundImage as any).scaleY || 1);
         
-        // Scale factors to convert from canvas to original image coordinates
-        const scaleX = originalDimensions.width / (imgWidth * imgScaleX);
-        const scaleY = originalDimensions.height / (imgHeight * imgScaleY);
-        
-        // Create a temporary canvas to render a full-resolution version of the canvas content
-        const tempCanvas = document.createElement('canvas');
-        const tempContext = tempCanvas.getContext('2d');
-        
-        // Clone the canvas to avoid modifying the original
-        const tempFabricCanvas = new Canvas(tempCanvas);
-        
-        // Add a clone of each object (except selection rectangles and paths) to the temp canvas
-        const objectsToRender = objects.filter(obj => 
-          obj instanceof FabricImage || // Background image
-          obj instanceof Text || // Text objects
-          obj instanceof Textbox || // Textbox objects
-          (obj instanceof Rect && (obj as any).fill === 'white' && !(obj as any).stroke) // White rectangles (background for text)
-        );
-        
-        // First, add the background image to draw at the correct resolution
-        const imgElement = (backgroundImage as any)._element;
-        if (imgElement) {
-          exportCtx.drawImage(
-            imgElement, 
-            0, 0, 
-            originalDimensions.width, 
-            originalDimensions.height
-          );
-        }
-        
-        // Now draw all other objects (white rectangles and text)
-        // Process in order: rectangles first, then text (to maintain proper layering)
-        
-        // First draw white rectangles (text backgrounds)
-        const rectObjects = objectsToRender.filter(obj => 
-          obj instanceof Rect && (obj as any).fill === 'white' && !(obj as any).stroke
-        );
-        
-        rectObjects.forEach(obj => {
-          const rect = obj as Rect;
-          const left = ((rect.left || 0) - imgLeft) * scaleX;
-          const top = ((rect.top || 0) - imgTop) * scaleY;
-          const width = ((rect.width || 0) * (rect.scaleX || 1)) * scaleX;
-          const height = ((rect.height || 0) * (rect.scaleY || 1)) * scaleY;
-          
-          exportCtx.fillStyle = 'white';
-          exportCtx.fillRect(left, top, width, height);
-        });
-        
-        // Then draw text objects
-        const textObjects = objectsToRender.filter(obj => 
-          obj instanceof Text || obj instanceof Textbox
-        );
-        
-        textObjects.forEach(obj => {
-          const textObj = obj as Text | Textbox;
-          
-          // Get coordinates in the original image space
-          const left = ((textObj.left || 0) - imgLeft) * scaleX;
-          const top = ((textObj.top || 0) - imgTop) * scaleY;
-          
-          // Scale font size to match the original image resolution
-          const fontSize = (textObj.fontSize || 16) * scaleX;
-          
-          // Set text properties
-          exportCtx.font = `${fontSize}px ${textObj.fontFamily}`;
-          exportCtx.fillStyle = textObj.fill || 'black';
-          exportCtx.textAlign = (textObj.textAlign as CanvasTextAlign) || 'left';
-          exportCtx.textBaseline = 'top'; // Important for proper text positioning
-          
-          // Draw the text
-          if (textObj instanceof Textbox) {
-            // Calculate line height
-            const lineHeight = textObj.lineHeight || 1.16;
-            const width = ((textObj.width || 0) * (textObj.scaleX || 1)) * scaleX;
-            
-            // Try multiple ways to get the wrapped lines
-            // Fabric.js has different properties in different versions
-            let wrappedLines: string[] = [];
-            let wrappingSource = 'unknown';
-            
-            // Try to access internal properties that might contain wrapped lines
-            const fabricTextbox = textObj as any;
-            
-            // First try using Fabric's own methods for wrapping if available
-            if (typeof fabricTextbox._splitTextIntoLines === 'function' && fabricTextbox.width) {
-              try {
-                // Use Fabric's internal method if available
-                const result = fabricTextbox._splitTextIntoLines(fabricTextbox.text);
-                if (result && Array.isArray(result.lines) && result.lines.length > 0) {
-                  wrappedLines = result.lines;
-                  wrappingSource = '_splitTextIntoLines';
-                }
-              } catch (e) {
-                console.warn('Error using _splitTextIntoLines:', e);
-              }
-            } else if (typeof fabricTextbox._wrapText === 'function' && fabricTextbox.width) {
-              try {
-                // Alternative wrapping method
-                const lines = fabricTextbox.text.split('\n');
-                const result = fabricTextbox._wrapText(lines, fabricTextbox.width);
-                if (Array.isArray(result) && result.length > 0) {
-                  wrappedLines = result.map((line: any) => 
-                    Array.isArray(line) ? (line as any[]).join('') : line
-                  );
-                  wrappingSource = '_wrapText';
-                }
-              } catch (e) {
-                console.warn('Error using _wrapText:', e);
-              }
-            }
-            
-            // If the methods above failed, fall back to accessing properties directly
-            if (wrappedLines.length === 0) {
-              if (Array.isArray(fabricTextbox.textLines) && fabricTextbox.textLines.length > 0) {
-                // Most common property for wrapped lines
-                wrappedLines = fabricTextbox.textLines;
-                wrappingSource = 'textLines';
-              } else if (Array.isArray(fabricTextbox._textLines) && fabricTextbox._textLines.length > 0) {
-                // Alternative property sometimes used
-                wrappedLines = fabricTextbox._textLines.map((line: any) => 
-                  Array.isArray(line) ? (line as any[]).join('') : line
-                );
-                wrappingSource = '_textLines';
-              } else if (Array.isArray(fabricTextbox._unwrappedTextLines) && fabricTextbox._unwrappedTextLines.length > 0) {
-                // Another alternative
-                wrappedLines = fabricTextbox._unwrappedTextLines.map((line: any) => 
-                  Array.isArray(line) ? (line as any[]).join('') : line
-                );
-                wrappingSource = '_unwrappedTextLines';
-              } else if (fabricTextbox.__cachedLines && Array.isArray(fabricTextbox.__cachedLines.lines)) {
-                // Try the cached lines if available
-                wrappedLines = fabricTextbox.__cachedLines.lines;
-                wrappingSource = '__cachedLines';
-              } else if (fabricTextbox.text) {
-                // Fallback to basic splitting if no wrapped lines found
-                wrappedLines = fabricTextbox.text.split('\n');
-                wrappingSource = 'manual split';
-              }
-            }
-            
-            console.log('Using wrapped lines from:', wrappingSource, 'Count:', wrappedLines.length);
-            
-            // Draw each line
-            wrappedLines.forEach((line: string, i: number) => {
-              if (typeof line !== 'string') {
-                // Handle cases where line might be an array of characters
-                if (Array.isArray(line)) {
-                  line = (line as any[]).join('');
-                } else {
-                  return; // Skip invalid lines
-                }
-              }
-              
-              const yPos = top + (i * lineHeight * fontSize);
-              
-              // Handle text alignment
-              let xPos = left;
-              if (textObj.textAlign === 'center') {
-                xPos = left + (width / 2);
-              } else if (textObj.textAlign === 'right') {
-                xPos = left + width;
-              }
-              
-              exportCtx.fillText(line, xPos, yPos);
-            });
-          } else {
-            // Simple text rendering for Text objects
-            exportCtx.fillText(textObj.text || '', left, top);
-          }
+        // Use Fabric.js built-in toDataURL with crop parameters
+        const dataUrl = (canvas as any).toDataURL({
+          format: 'png',
+          quality: 1,
+          // Use the image bounds for cropping
+          left: imgLeft,
+          top: imgTop,
+          width: imgWidth,
+          height: imgHeight,
+          // The multiplier helps maintain the original resolution
+          multiplier: Math.max(
+            originalDimensions.width / imgWidth,
+            originalDimensions.height / imgHeight
+          )
         });
         
         // Restore the original canvas state
@@ -2587,18 +2415,20 @@ const CanvasEditor = forwardRef<CanvasEditorRef, CanvasEditorProps>(({ image, to
         canvas.setViewportTransform(originalVpt);
         canvas.renderAll();
         
-        // Convert the export canvas to a blob
-        exportCanvas.toBlob((blob) => {
-          if (blob) {
+        // Convert the data URL to a Blob
+        fetch(dataUrl)
+          .then(res => res.blob())
+          .then(blob => {
             setLoadingStatus("Image exported successfully");
             setTimeout(() => setLoadingStatus(""), 1500);
             resolve(blob);
-          } else {
+          })
+          .catch(error => {
+            console.error("Error converting data URL to blob:", error);
             setLoadingStatus("Failed to export image");
             setTimeout(() => setLoadingStatus(""), 1500);
             resolve(null);
-          }
-        }, 'image/png');
+          });
       } catch (error) {
         console.error("Error exporting image:", error);
         setLoadingStatus(`Error exporting image: ${error instanceof Error ? error.message : 'Unknown error'}`);
