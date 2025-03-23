@@ -8,6 +8,7 @@ cache_volume = modal.Volume.from_name("cache-volume", create_if_missing=True)
 
 # Create image with dependencies
 image = (modal.Image.debian_slim(python_version="3.10")
+         .env({"TRANSFORMERS_CACHE": "/cache"})
          .apt_install("libgl1", "libglib2.0-0")
          .pip_install_from_requirements("requirements.txt")
          .add_local_dir(".", remote_path="/app")
@@ -19,7 +20,6 @@ image = (modal.Image.debian_slim(python_version="3.10")
     gpu="T4",
     secrets=[modal.Secret.from_name("deepl-secret")],
     volumes={"/tmp/cache": cache_volume},
-    environment_vars={"TRANSFORMERS_CACHE": "/cache"}
 )
 @modal.asgi_app()
 def fastapi_endpoint():
