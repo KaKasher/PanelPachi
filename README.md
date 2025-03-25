@@ -2,6 +2,8 @@
 
 PanelPachi is a web application designed to streamline the manga editing process using machine learning-powered tools. It enables users to remove unwanted text, objects, and sound effects (SFX) from manga pages, translate Japanese text seamlessly, and reinsert translated text into the correct positions.
 
+https://github.com/user-attachments/assets/ca4967e2-d530-4d69-ab3b-50ffac6f6a79
+
 ## Features
 - **Inpainting**: Remove unwanted objects, text, or SFX from manga pages using AI-powered inpainting.
 - **Text Detection & Translation**: Utilize [manga-ocr](https://github.com/kha-white/manga-ocr) for accurate Japanese text detection and the DeepL API for real-time translation.
