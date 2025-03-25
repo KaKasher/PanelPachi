@@ -1,7 +1,11 @@
 /* Import SF Toontime font */
 @font-face {
   font-family: 'SF Toontime';
-  src: url('./fonts/SF_Toontime.ttf') format('truetype');
+  src: url('./fonts/SF_Toontime.ttf') format('truetype'),
+       url('./fonts/SF_Toontime.woff') format('woff'),
+       url('./fonts/SF_Toontime.woff2') format('woff2'),
+       url('./fonts/SF_Toontime.eot') format('embedded-opentype'),
+       url('./fonts/SF_Toontime.svg') format('svg');
   font-weight: normal;
   font-style: normal;
   font-display: block;
