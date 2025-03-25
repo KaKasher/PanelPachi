@@ -8,17 +8,37 @@ PanelPachi is a web application designed to streamline the manga editing process
 - **Text Repositioning**: Place translated text in the appropriate locations within the manga page.
 - **Download Edited Pages**: Save the modified manga page with clean edits and translations.
 
-## Demo (as of 03.10.2025)
-https://github.com/user-attachments/assets/c3ad8463-ce72-4a61-b887-f0d83cce7232
-
 ## Installation & Setup
-Currently, there is no local setup guide. Hosting plans are in progress. Coming soon!
+### Local Deployment with Docker
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/KaKasher/PanelPachi.git
+   cd PanelPachi
+   ```
+
+2. Create a `.env` file from the example:
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Edit the `.env` file and add your DeepL API key:
+   ```
+   DEEPL_API_KEY=your-api-key-here
+   ```
+
+4. Build and start the containers:
+   ```bash
+   docker compose up --build
+   ```
+
+5. Access the application:
+   - Frontend: http://localhost:5173
+   - Backend API: http://localhost:8000
+
 
 ## TODO
-- Fix the little bugs in the current version
-- Host the website
+- Add multiple page support
 - Add AI Generated SFX
 
 ---
 Stay tuned for updates and improvements!
-
